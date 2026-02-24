@@ -16,12 +16,7 @@ import io
 # ============================================================================
 
 def check_auth():
-    """Check if user is authenticated with @judge.me Google account"""
-
-    # Check if authentication is configured
-    if "google_auth" not in st.secrets:
-        st.warning("Authentication not configured. Running in demo mode.")
-        return True
+    """Check if user is authenticated"""
 
     # Check session state for authentication
     if "authenticated" not in st.session_state:
@@ -32,51 +27,25 @@ def check_auth():
         return True
 
     # Show login page
-    st.title("Judge.me Ads Dashboard")
-    st.markdown("### Please sign in with your @judge.me Google account")
+    st.title("🔒 Judge.me Ads Dashboard")
+    st.markdown("### Team Login")
+    st.markdown("Enter the team password to access the dashboard.")
 
-    # Use Streamlit's experimental OAuth (if available) or show manual instructions
-    try:
-        from streamlit_google_auth import Authenticate
+    password = st.text_input("Password:", type="password", key="login_password")
 
-        authenticator = Authenticate(
-            secret_credentials_file='google_credentials.json',
-            cookie_name='judgeme_dashboard',
-            cookie_key=st.secrets.get("cookie_key", "judgeme_secret_key"),
-            redirect_uri=st.secrets.get("redirect_uri", "http://localhost:8501"),
-        )
+    if st.button("Login", type="primary"):
+        # Get password from secrets, fallback to default
+        correct_password = st.secrets.get("app_password", "judgeme2026")
 
-        authenticator.check_authentification()
-        authenticator.login()
+        if password == correct_password:
+            st.session_state.authenticated = True
+            st.session_state.user_email = "team@judge.me"
+            st.rerun()
+        else:
+            st.error("Incorrect password. Please try again.")
 
-        if st.session_state.get('connected'):
-            email = st.session_state.get('user_info', {}).get('email', '')
-            if email.endswith('@judge.me'):
-                st.session_state.authenticated = True
-                st.session_state.user_email = email
-                st.rerun()
-            else:
-                st.error(f"Access denied. Only @judge.me accounts are allowed. You signed in as: {email}")
-                authenticator.logout()
-                return False
-    except ImportError:
-        # Fallback: Simple password protection for demo
-        st.markdown("---")
-        st.markdown("**Demo Mode:** Enter the team password to continue")
-        password = st.text_input("Password:", type="password")
-
-        if password:
-            if password == st.secrets.get("app_password", "judgeme2026"):
-                st.session_state.authenticated = True
-                st.session_state.user_email = "team@judge.me"
-                st.rerun()
-            else:
-                st.error("Incorrect password")
-
-        st.markdown("---")
-        st.info("To enable Google OAuth, add `streamlit-google-auth` to requirements.txt and configure Google Cloud credentials.")
-        return False
-
+    st.markdown("---")
+    st.caption("Contact your team admin for access.")
     return False
 
 
