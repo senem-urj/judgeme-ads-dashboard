@@ -365,9 +365,9 @@ def process_campaign_metrics_upload(uploaded_file):
 # Load data
 load_data()
 
-# Check authentication (comment out for local testing)
-# if not check_auth():
-#     st.stop()
+# Check authentication
+if not check_auth():
+    st.stop()
 
 # ============================================================================
 # SIDEBAR
