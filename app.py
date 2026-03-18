@@ -1,850 +1,919 @@
 """
-Judge.me Shopify App Store Ads Analysis Dashboard
-Period: August 21, 2025 - February 18, 2026
-Focus: Keyword Discovery for Install Growth
+Judge.me Shopify App Store Ads Dashboard v2
+P1: Aug 21, 2025 – Feb 18, 2026  (before keyword changes)
+P2: Feb 24, 2026 – Mar 17, 2026  (after keyword changes, 22 days)
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
-import io
-
-# ============================================================================
-# AUTHENTICATION
-# ============================================================================
-
-def check_auth():
-    """Check if user is authenticated"""
-
-    # Check session state for authentication
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-        st.session_state.user_email = None
-
-    if st.session_state.authenticated:
-        return True
-
-    # Show login page
-    st.title("🔒 Judge.me Ads Dashboard")
-    st.markdown("### Team Login")
-    st.markdown("Enter the team password to access the dashboard.")
-
-    password = st.text_input("Password:", type="password", key="login_password")
-
-    if st.button("Login", type="primary"):
-        # Get password from secrets, fallback to default
-        correct_password = st.secrets.get("app_password", "judgeme2026")
-
-        if password == correct_password:
-            st.session_state.authenticated = True
-            st.session_state.user_email = "team@judge.me"
-            st.rerun()
-        else:
-            st.error("Incorrect password. Please try again.")
-
-    st.markdown("---")
-    st.caption("Contact your team admin for access.")
-    return False
-
+from pathlib import Path
 
 # ============================================================================
 # PAGE CONFIG
 # ============================================================================
-
 st.set_page_config(
-    page_title="Judge.me Ads Analysis",
+    page_title="Judge.me Ads Dashboard",
     page_icon="⭐",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 10px 0;
-    }
-    .highlight-green { color: #28a745; font-weight: bold; }
-    .highlight-red { color: #dc3545; font-weight: bold; }
-    .highlight-yellow { color: #ffc107; font-weight: bold; }
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] { padding: 10px 20px; }
-    .upload-section {
-        background-color: #e8f4f8;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
+# ============================================================================
+# AUTH
+# ============================================================================
+def check_auth():
+    if st.session_state.get("authenticated"):
+        return True
+    st.title("🔒 Judge.me Ads Dashboard")
+    pw = st.text_input("Password:", type="password", key="login_pw")
+    if st.button("Login", type="primary"):
+        if pw == st.secrets.get("app_password", "judgeme2026"):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.caption("Contact your team admin for access.")
+    return False
 
 # ============================================================================
-# DATA LOADING FUNCTIONS
+# CONSTANTS
 # ============================================================================
+DATA_DIR = Path(__file__).parent / "data"
 
-def get_default_campaign_data():
-    """Return default campaign summary data"""
-    return pd.DataFrame({
-        'Campaign': [
-            'Search_EN_ProductReview_2024.08.05',
-            'Search_EN_Competitors_2024.08.12',
-            'Search_EN_Review-variations_2024.04.29',
-            'Search_EN_Features_2024.08.19'
-        ],
-        'Total Spend': [43736.3, 5664.5, 6501.34, 14780.0],
-        'Total Installs': [13539, 1330, 1180, 2127],
-        'Avg CPI': [3.23, 4.26, 5.51, 6.95],
-        'Avg Install Rate': [0.72, 0.68, 0.64, 0.58],
-        'Total Customers': [358, 67, 27, 46],
-        'Total Revenue': [12152.57, 3467.45, 1117.55, 1629.19],
-        'ROAS': [27.8, 61.2, 17.2, 11.0]
+CAMPAIGN_MAP = {
+    "Search_EN_ProductReview_2024.08.05": "ProductReview",
+    "Search_EN_Competitors_2024.08.12": "Competitors",
+    "Search_EN_Review-variations_2024.04.29": "Review-variations",
+    "Search_EN_Features_2024.08.19": "Features",
+    "Search_EN_Trust_2025.03.17": "Trust",
+}
+
+P1_FILES = [
+    "p1_keywords_review_variations.csv",
+    "p1_keywords_product_review.csv",
+    "p1_keywords_competitors.csv",
+    "p1_keywords_features.csv",
+    "p1_keywords_trust.csv",
+]
+P2_FILES = [
+    "p2_keywords_trust.csv",
+    "p2_keywords_features.csv",
+    "p2_keywords_competitors.csv",
+    "p2_keywords_product_review.csv",
+]
+P2_SEARCH_FILES = [
+    "p2_search_terms_trust.csv",
+    "p2_search_terms_features.csv",
+    "p2_search_terms_competitors.csv",
+]
+
+# Keywords where bids were increased in late Feb 2026
+BID_INCREASED = {
+    ("okendo", "exact"),
+    ("yotpo reviews", "exact"),
+    ("loox - photo reviews", "exact"),
+    ("loox review", "exact"),
+    ("shopify product reviews", "exact"),
+    ("customer reviews", "exact"),
+    ("reviews app", "exact"),
+    ("review", "exact"),
+    ("trustoo reviews", "exact"),
+    ("rivo reviews", "exact"),
+    ("reviews importer", "exact"),
+    ("review importer", "exact"),
+}
+
+P1_LABEL = "Aug 21 – Feb 18 (P1)"
+P2_LABEL = "Feb 24 – Mar 17 (P2)"
+
+# ============================================================================
+# DATA LOADING
+# ============================================================================
+@st.cache_data
+def load_keywords(files):
+    dfs = []
+    for fname in files:
+        p = DATA_DIR / fname
+        if not p.exists():
+            continue
+        df = pd.read_csv(p)
+        df["Campaign"] = df["Ad Name"].map(CAMPAIGN_MAP).fillna(df["Ad Name"])
+        start = pd.to_datetime(df["Start Date"].iloc[0])
+        end = pd.to_datetime(df["End Date"].iloc[0])
+        df["_days"] = (end - start).days + 1
+        dfs.append(df)
+    if not dfs:
+        return pd.DataFrame()
+    out = pd.concat(dfs, ignore_index=True)
+    out = out.rename(columns={
+        "Match Type": "Match",
+        "Install Rate": "InstallRate",
+        "Cost Per Install": "CPI",
+        "Return On Spend": "ROAS",
+        "Average Position": "AvgPos",
+        "Click Through Rate": "CTR",
+        "Cost Per Click": "CPC",
     })
-
-def get_default_keywords_product_review():
-    """Return default ProductReview keywords data"""
-    return pd.DataFrame([
-        {'Keyword': 'reviews', 'Match': 'exact', 'Bid': 2.1, 'Impressions': 36878, 'Clicks': 6348, 'Installs': 4594, 'Spend': 13848.8, 'CPI': 3.01, 'InstallRate': 0.72, 'ROAS': 30.2},
-        {'Keyword': 'review', 'Match': 'exact', 'Bid': 1.5, 'Impressions': 23151, 'Clicks': 4101, 'Installs': 3201, 'Spend': 6151.5, 'CPI': 1.92, 'InstallRate': 0.78, 'ROAS': 37.7},
-        {'Keyword': 'product review', 'Match': 'broad', 'Bid': 3.0, 'Impressions': 15329, 'Clicks': 2622, 'Installs': 2033, 'Spend': 7866.0, 'CPI': 3.87, 'InstallRate': 0.78, 'ROAS': 24.2},
-        {'Keyword': 'product reviews', 'Match': 'exact', 'Bid': 3.0, 'Impressions': 8614, 'Clicks': 1567, 'Installs': 1244, 'Spend': 4701.0, 'CPI': 3.78, 'InstallRate': 0.79, 'ROAS': 25.7},
-        {'Keyword': 'google reviews', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 7848, 'Clicks': 652, 'Installs': 307, 'Spend': 3260.0, 'CPI': 10.62, 'InstallRate': 0.47, 'ROAS': 27.3},
-        {'Keyword': 'product review', 'Match': 'exact', 'Bid': 2.5, 'Impressions': 4694, 'Clicks': 866, 'Installs': 685, 'Spend': 2165.0, 'CPI': 3.16, 'InstallRate': 0.79, 'ROAS': 21.0},
-        {'Keyword': 'google review', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 3985, 'Clicks': 372, 'Installs': 180, 'Spend': 1860.0, 'CPI': 10.33, 'InstallRate': 0.48, 'ROAS': 28.6},
-        {'Keyword': 'reviews app', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 2372, 'Clicks': 445, 'Installs': 336, 'Spend': 890.0, 'CPI': 2.65, 'InstallRate': 0.76, 'ROAS': 41.0},
-        {'Keyword': 'shopify product reviews', 'Match': 'exact', 'Bid': 1.0, 'Impressions': 1876, 'Clicks': 392, 'Installs': 339, 'Spend': 392.0, 'CPI': 1.16, 'InstallRate': 0.86, 'ROAS': 50.3},
-        {'Keyword': 'reviews free', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 1822, 'Clicks': 483, 'Installs': 374, 'Spend': 966.0, 'CPI': 2.58, 'InstallRate': 0.77, 'ROAS': 7.8},
-        {'Keyword': 'review widget', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 973, 'Clicks': 242, 'Installs': 150, 'Spend': 1210.0, 'CPI': 8.07, 'InstallRate': 0.62, 'ROAS': 18.8},
-        {'Keyword': 'customer reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 474, 'Clicks': 87, 'Installs': 72, 'Spend': 174.0, 'CPI': 2.42, 'InstallRate': 0.83, 'ROAS': 60.6},
-        {'Keyword': 'video reviews', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 61, 'Clicks': 8, 'Installs': 5, 'Spend': 40.0, 'CPI': 8.0, 'InstallRate': 0.63, 'ROAS': 0},
-        {'Keyword': 'photo reviews', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 20, 'Clicks': 2, 'Installs': 2, 'Spend': 10.0, 'CPI': 5.0, 'InstallRate': 1.0, 'ROAS': 0},
-        {'Keyword': 'store reviews', 'Match': 'exact', 'Bid': 8.0, 'Impressions': 16, 'Clicks': 1, 'Installs': 1, 'Spend': 8.0, 'CPI': 8.0, 'InstallRate': 1.0, 'ROAS': 0},
-    ])
-
-def get_default_keywords_competitors():
-    """Return default Competitors keywords data"""
-    return pd.DataFrame([
-        {'Keyword': 'loox', 'Match': 'exact', 'Bid': 3.0, 'Impressions': 16543, 'Clicks': 785, 'Installs': 561, 'Spend': 2355.0, 'CPI': 4.20, 'InstallRate': 0.71, 'ROAS': 55.2, 'Customers': 30},
-        {'Keyword': 'trustoo', 'Match': 'exact', 'Bid': 2.5, 'Impressions': 12689, 'Clicks': 244, 'Installs': 171, 'Spend': 610.0, 'CPI': 3.57, 'InstallRate': 0.70, 'ROAS': 17.5, 'Customers': 2},
-        {'Keyword': 'trustpilot', 'Match': 'exact', 'Bid': 2.5, 'Impressions': 7806, 'Clicks': 488, 'Installs': 240, 'Spend': 1220.0, 'CPI': 5.08, 'InstallRate': 0.49, 'ROAS': 49.6, 'Customers': 13},
-        {'Keyword': 'trustoo.io reviews', 'Match': 'exact', 'Bid': 3.0, 'Impressions': 4876, 'Clicks': 70, 'Installs': 44, 'Spend': 210.0, 'CPI': 4.77, 'InstallRate': 0.63, 'ROAS': 0, 'Customers': 0},
-        {'Keyword': 'loox', 'Match': 'broad', 'Bid': 3.5, 'Impressions': 3519, 'Clicks': 153, 'Installs': 109, 'Spend': 535.5, 'CPI': 4.91, 'InstallRate': 0.71, 'ROAS': 28.3, 'Customers': 5},
-        {'Keyword': 'loox review', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 2477, 'Clicks': 120, 'Installs': 83, 'Spend': 240.0, 'CPI': 2.89, 'InstallRate': 0.69, 'ROAS': 76.1, 'Customers': 5},
-        {'Keyword': 'okendo', 'Match': 'exact', 'Bid': 3.5, 'Impressions': 2041, 'Clicks': 74, 'Installs': 35, 'Spend': 259.0, 'CPI': 7.40, 'InstallRate': 0.47, 'ROAS': 151.5, 'Customers': 9},
-        {'Keyword': 'trustoo reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 1164, 'Clicks': 21, 'Installs': 17, 'Spend': 42.0, 'CPI': 2.47, 'InstallRate': 0.81, 'ROAS': 0, 'Customers': 0},
-        {'Keyword': 'rivo reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 692, 'Clicks': 35, 'Installs': 26, 'Spend': 70.0, 'CPI': 2.69, 'InstallRate': 0.74, 'ROAS': 0, 'Customers': 0},
-        {'Keyword': 'yotpo reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 554, 'Clicks': 11, 'Installs': 7, 'Spend': 22.0, 'CPI': 3.14, 'InstallRate': 0.64, 'ROAS': 341.0, 'Customers': 1},
-        {'Keyword': 'klaviyo reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 411, 'Clicks': 13, 'Installs': 9, 'Spend': 26.0, 'CPI': 2.89, 'InstallRate': 0.69, 'ROAS': 0, 'Customers': 0},
-        {'Keyword': 'loox - photo reviews', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 360, 'Clicks': 20, 'Installs': 17, 'Spend': 40.0, 'CPI': 2.35, 'InstallRate': 0.85, 'ROAS': 190.4, 'Customers': 2},
-        {'Keyword': 'reviews io', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 96, 'Clicks': 3, 'Installs': 3, 'Spend': 6.0, 'CPI': 2.0, 'InstallRate': 1.0, 'ROAS': 0, 'Customers': 0},
-        {'Keyword': 'tydal review', 'Match': 'exact', 'Bid': 2.0, 'Impressions': 37, 'Clicks': 3, 'Installs': 2, 'Spend': 6.0, 'CPI': 3.0, 'InstallRate': 0.67, 'ROAS': 0, 'Customers': 0},
-    ])
-
-def get_default_keywords_review_variations():
-    """Return default Review-variations keywords data"""
-    return pd.DataFrame([
-        {'Keyword': 'testimonial', 'Match': 'broad', 'Bid': 2.5, 'Impressions': 6402, 'Clicks': 784, 'Installs': 474, 'Spend': 1960.0, 'CPI': 4.14, 'InstallRate': 0.60, 'ROAS': 13.8},
-        {'Keyword': 'product rating', 'Match': 'broad', 'Bid': 4.5, 'Impressions': 5924, 'Clicks': 270, 'Installs': 185, 'Spend': 1215.0, 'CPI': 6.57, 'InstallRate': 0.69, 'ROAS': 24.9},
-        {'Keyword': 'customer feedback', 'Match': 'broad', 'Bid': 5.0, 'Impressions': 5425, 'Clicks': 320, 'Installs': 185, 'Spend': 1600.0, 'CPI': 8.65, 'InstallRate': 0.58, 'ROAS': 9.5},
-        {'Keyword': 'testimonial', 'Match': 'exact', 'Bid': 2.82, 'Impressions': 2714, 'Clicks': 337, 'Installs': 202, 'Spend': 950.34, 'CPI': 4.70, 'InstallRate': 0.60, 'ROAS': 23.9},
-        {'Keyword': 'product rating', 'Match': 'exact', 'Bid': 3.0, 'Impressions': 490, 'Clicks': 42, 'Installs': 28, 'Spend': 126.0, 'CPI': 4.50, 'InstallRate': 0.67, 'ROAS': 0},
-        {'Keyword': 'feedback app', 'Match': 'broad', 'Bid': 3.0, 'Impressions': 415, 'Clicks': 10, 'Installs': 4, 'Spend': 30.0, 'CPI': 7.50, 'InstallRate': 0.40, 'ROAS': 0},
-        {'Keyword': 'ratings', 'Match': 'exact', 'Bid': 5.0, 'Impressions': 342, 'Clicks': 124, 'Installs': 102, 'Spend': 620.0, 'CPI': 6.08, 'InstallRate': 0.82, 'ROAS': 26.6},
-    ])
-
-def get_default_keywords_features():
-    """Return default Features keywords data"""
-    return pd.DataFrame([
-        {'Keyword': 'amazon reviews importer', 'Match': 'broad', 'Bid': 5.0, 'Impressions': 23541, 'Clicks': 1877, 'Installs': 1356, 'Spend': 9385.0, 'CPI': 6.92, 'InstallRate': 0.72, 'ROAS': 12.5},
-        {'Keyword': 'etsy importer', 'Match': 'broad', 'Bid': 5.0, 'Impressions': 9028, 'Clicks': 412, 'Installs': 268, 'Spend': 2060.0, 'CPI': 7.69, 'InstallRate': 0.65, 'ROAS': 13.9},
-        {'Keyword': 'carousel', 'Match': 'broad', 'Bid': 6.0, 'Impressions': 4786, 'Clicks': 116, 'Installs': 41, 'Spend': 696.0, 'CPI': 16.98, 'InstallRate': 0.35, 'ROAS': 2.2},
-        {'Keyword': 'ugc', 'Match': 'broad', 'Bid': 7.0, 'Impressions': 2676, 'Clicks': 81, 'Installs': 31, 'Spend': 567.0, 'CPI': 18.29, 'InstallRate': 0.38, 'ROAS': 0},
-        {'Keyword': 'amazon reviews', 'Match': 'exact', 'Bid': 3.0, 'Impressions': 1655, 'Clicks': 148, 'Installs': 93, 'Spend': 444.0, 'CPI': 4.77, 'InstallRate': 0.63, 'ROAS': 3.4},
-        {'Keyword': 'review importer', 'Match': 'exact', 'Bid': 3.6, 'Impressions': 1430, 'Clicks': 192, 'Installs': 147, 'Spend': 691.2, 'CPI': 4.70, 'InstallRate': 0.77, 'ROAS': 4.3},
-        {'Keyword': 'reviews importer', 'Match': 'exact', 'Bid': 3.2, 'Impressions': 1409, 'Clicks': 239, 'Installs': 176, 'Spend': 764.8, 'CPI': 4.35, 'InstallRate': 0.74, 'ROAS': 13.8},
-        {'Keyword': 'rich snippet', 'Match': 'broad', 'Bid': 5.0, 'Impressions': 605, 'Clicks': 12, 'Installs': 7, 'Spend': 60.0, 'CPI': 8.57, 'InstallRate': 0.58, 'ROAS': 0},
-        {'Keyword': 'q&a', 'Match': 'broad', 'Bid': 6.0, 'Impressions': 506, 'Clicks': 12, 'Installs': 4, 'Spend': 72.0, 'CPI': 18.0, 'InstallRate': 0.33, 'ROAS': 0},
-        {'Keyword': 'coupons', 'Match': 'broad', 'Bid': 2.0, 'Impressions': 389, 'Clicks': 6, 'Installs': 2, 'Spend': 12.0, 'CPI': 6.0, 'InstallRate': 0.33, 'ROAS': 0},
-    ])
-
-def get_default_new_keywords():
-    """Return default new keyword recommendations"""
-    return pd.DataFrame([
-        {'Keyword': 'testimonials', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'HIGH', 'Suggested Bid': 3.00, 'Est. Impressions': 3500, 'Est. Installs': 280, 'Rationale': 'High volume search term with 321 installs via broad match'},
-        {'Keyword': 'testimonial slider', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'HIGH', 'Suggested Bid': 3.00, 'Est. Impressions': 1500, 'Est. Installs': 100, 'Rationale': '127 installs from broad match, specific feature intent'},
-        {'Keyword': 'rating', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'HIGH', 'Suggested Bid': 4.00, 'Est. Impressions': 1500, 'Est. Installs': 120, 'Rationale': '146 installs, 77% install rate - strong performer'},
-        {'Keyword': 'loox reviews', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 3.50, 'Est. Impressions': 3000, 'Est. Installs': 95, 'Rationale': 'Competitor comparison intent, 100 installs via broad'},
-        {'Keyword': 'star rating', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'HIGH', 'Suggested Bid': 3.50, 'Est. Impressions': 800, 'Est. Installs': 60, 'Rationale': 'Core feature term, high relevance'},
-        {'Keyword': 'stamped.io', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 3.00, 'Est. Impressions': 2000, 'Est. Installs': 80, 'Rationale': 'Major competitor not yet targeted'},
-        {'Keyword': 'stamped reviews', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 3.00, 'Est. Impressions': 1200, 'Est. Installs': 50, 'Rationale': 'Competitor + reviews intent'},
-        {'Keyword': 'fera reviews', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 2.50, 'Est. Impressions': 800, 'Est. Installs': 35, 'Rationale': 'Growing competitor, untapped'},
-        {'Keyword': 'vitals reviews', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 2.50, 'Est. Impressions': 500, 'Est. Installs': 25, 'Rationale': 'Vitals app users seeking reviews'},
-        {'Keyword': 'growave reviews', 'Match Type': 'exact', 'Campaign': 'Competitors', 'Priority': 'HIGH', 'Suggested Bid': 2.50, 'Est. Impressions': 400, 'Est. Installs': 20, 'Rationale': 'Multi-feature competitor'},
-        {'Keyword': 'photo review app', 'Match Type': 'exact', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 500, 'Est. Installs': 40, 'Rationale': 'Feature-specific, high intent'},
-        {'Keyword': 'video review app', 'Match Type': 'exact', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 400, 'Est. Installs': 30, 'Rationale': 'Video reviews feature intent'},
-        {'Keyword': 'review request email', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'MEDIUM', 'Suggested Bid': 3.50, 'Est. Impressions': 600, 'Est. Installs': 45, 'Rationale': 'Core feature, automation intent'},
-        {'Keyword': 'google shopping reviews', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 800, 'Est. Installs': 50, 'Rationale': 'SEO/Rich snippet intent'},
-        {'Keyword': 'aliexpress reviews', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 1200, 'Est. Installs': 80, 'Rationale': 'Import feature, dropship audience'},
-        {'Keyword': 'ebay reviews importer', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 400, 'Est. Installs': 25, 'Rationale': 'Import feature expansion'},
-        {'Keyword': 'review carousel', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'MEDIUM', 'Suggested Bid': 3.50, 'Est. Impressions': 500, 'Est. Installs': 35, 'Rationale': 'Display feature intent'},
-        {'Keyword': 'review widget', 'Match Type': 'broad', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 4.00, 'Est. Impressions': 800, 'Est. Installs': 50, 'Rationale': 'Expand widget coverage'},
-        {'Keyword': 'dropshipping reviews', 'Match Type': 'exact', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 3.50, 'Est. Impressions': 600, 'Est. Installs': 40, 'Rationale': 'Target dropship segment'},
-        {'Keyword': 'shopify store reviews', 'Match Type': 'exact', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 2.50, 'Est. Impressions': 1000, 'Est. Installs': 70, 'Rationale': 'Platform-specific intent'},
-        {'Keyword': 'ecommerce reviews', 'Match Type': 'exact', 'Campaign': 'ProductReview', 'Priority': 'MEDIUM', 'Suggested Bid': 3.00, 'Est. Impressions': 500, 'Est. Installs': 35, 'Rationale': 'Broad ecommerce audience'},
-        {'Keyword': 'social proof', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'LOW', 'Suggested Bid': 3.00, 'Est. Impressions': 400, 'Est. Installs': 20, 'Rationale': 'Conceptual term, test performance'},
-        {'Keyword': 'trust badges', 'Match Type': 'exact', 'Campaign': 'Review-variations', 'Priority': 'LOW', 'Suggested Bid': 2.50, 'Est. Impressions': 500, 'Est. Installs': 25, 'Rationale': 'Related concept, may convert'},
-        {'Keyword': 'nps survey', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'LOW', 'Suggested Bid': 3.00, 'Est. Impressions': 300, 'Est. Installs': 15, 'Rationale': 'NPS feature awareness'},
-        {'Keyword': 'review syndication', 'Match Type': 'exact', 'Campaign': 'Features', 'Priority': 'LOW', 'Suggested Bid': 4.00, 'Est. Impressions': 200, 'Est. Installs': 15, 'Rationale': 'Enterprise feature'},
-    ])
-
-def get_default_keywords_to_pause():
-    """Return default keywords to pause"""
-    return pd.DataFrame([
-        {'Keyword': 'customer feedback', 'Match': 'broad', 'Campaign': 'Review-variations', 'Action': 'PAUSE', 'Reason': 'High CPI ($8.65), low ROAS (9.5%), catching irrelevant searches', 'Spend': 1600.0, 'Installs': 185},
-        {'Keyword': 'feedback app', 'Match': 'broad', 'Campaign': 'Review-variations', 'Action': 'PAUSE', 'Reason': 'Very low relevance - catching "free apps", "mobile app builder"', 'Spend': 30.0, 'Installs': 4},
-        {'Keyword': 'product rating', 'Match': 'broad', 'Campaign': 'Review-variations', 'Action': 'REDUCE BID', 'Reason': 'Catching shipping rate searches. Reduce bid to $3.00', 'Spend': 1215.0, 'Installs': 185},
-        {'Keyword': 'carousel', 'Match': 'broad', 'Campaign': 'Features', 'Action': 'REDUCE BID', 'Reason': 'Very high CPI ($16.98). Reduce bid to $3.00', 'Spend': 696.0, 'Installs': 41},
-        {'Keyword': 'ugc', 'Match': 'broad', 'Campaign': 'Features', 'Action': 'REDUCE BID', 'Reason': 'Highest CPI ($18.29). Reduce bid to $4.00 or pause', 'Spend': 567.0, 'Installs': 31},
-        {'Keyword': 'google reviews', 'Match': 'exact', 'Campaign': 'ProductReview', 'Action': 'REDUCE BID', 'Reason': 'High CPI ($10.62). Reduce to $3.50', 'Spend': 3260.0, 'Installs': 307},
-        {'Keyword': 'google review', 'Match': 'exact', 'Campaign': 'ProductReview', 'Action': 'REDUCE BID', 'Reason': 'High CPI ($10.33). Reduce to $3.50', 'Spend': 1860.0, 'Installs': 180},
-        {'Keyword': 'q&a', 'Match': 'broad', 'Campaign': 'Features', 'Action': 'PAUSE', 'Reason': 'Very high CPI ($18.00), low install rate (33%)', 'Spend': 72.0, 'Installs': 4},
-    ])
-
-def get_default_bid_increases():
-    """Return default bid increase recommendations"""
-    return pd.DataFrame([
-        {'Keyword': 'okendo', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 3.50, 'Recommended Bid': 5.00, 'Reason': 'Highest ROAS (151.5%), best performer'},
-        {'Keyword': 'yotpo reviews', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 2.00, 'Recommended Bid': 3.50, 'Reason': 'Exceptional ROAS (341%)'},
-        {'Keyword': 'loox - photo reviews', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'ROAS 190.4%, install rate 85%'},
-        {'Keyword': 'loox review', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'ROAS 76.1%, good volume'},
-        {'Keyword': 'shopify product reviews', 'Match': 'exact', 'Campaign': 'ProductReview', 'Current Bid': 1.00, 'Recommended Bid': 2.00, 'Reason': 'Best CPI ($1.16), 86% install rate'},
-        {'Keyword': 'customer reviews', 'Match': 'exact', 'Campaign': 'ProductReview', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'ROAS 60.6%, install rate 83%'},
-        {'Keyword': 'reviews app', 'Match': 'exact', 'Campaign': 'ProductReview', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'ROAS 41%, install rate 76%'},
-        {'Keyword': 'review', 'Match': 'exact', 'Campaign': 'ProductReview', 'Current Bid': 1.50, 'Recommended Bid': 2.00, 'Reason': 'Best CPI ($1.92), 78% install rate'},
-        {'Keyword': 'trustoo reviews', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'Excellent CPI ($2.47), 81% install rate'},
-        {'Keyword': 'rivo reviews', 'Match': 'exact', 'Campaign': 'Competitors', 'Current Bid': 2.00, 'Recommended Bid': 3.00, 'Reason': 'Good CPI ($2.69), 74% install rate'},
-        {'Keyword': 'reviews importer', 'Match': 'exact', 'Campaign': 'Features', 'Current Bid': 3.20, 'Recommended Bid': 4.00, 'Reason': 'Good CPI ($4.35), 74% install rate'},
-        {'Keyword': 'review importer', 'Match': 'exact', 'Campaign': 'Features', 'Current Bid': 3.60, 'Recommended Bid': 4.50, 'Reason': 'Good volume, 77% install rate'},
-    ])
-
-def get_default_search_opportunities():
-    """Return default search term opportunities"""
-    return pd.DataFrame([
-        {'Search Term': 'testimonials', 'Triggered By': 'testimonial (broad)', 'Impressions': 3748, 'Clicks': 517, 'Installs': 321, 'Spend': 1292.5, 'CPI': 4.03, 'InstallRate': 0.62, 'Recommendation': 'Add as exact match', 'Suggested Bid': 3.0},
-        {'Search Term': 'testimonial slider', 'Triggered By': 'testimonial (broad)', 'Impressions': 1752, 'Clicks': 219, 'Installs': 127, 'Spend': 547.5, 'CPI': 4.31, 'InstallRate': 0.58, 'Recommendation': 'Add as exact match', 'Suggested Bid': 3.0},
-        {'Search Term': 'rating', 'Triggered By': 'product rating (broad)', 'Impressions': 1675, 'Clicks': 189, 'Installs': 146, 'Spend': 850.5, 'CPI': 5.83, 'InstallRate': 0.77, 'Recommendation': 'Add as exact match', 'Suggested Bid': 4.0},
-        {'Search Term': 'feedback', 'Triggered By': 'customer feedback (broad)', 'Impressions': 1077, 'Clicks': 241, 'Installs': 156, 'Spend': 1205.0, 'CPI': 7.72, 'InstallRate': 0.65, 'Recommendation': 'Consider - high CPI', 'Suggested Bid': 3.5},
-        {'Search Term': 'loox reviews', 'Triggered By': 'loox (broad)', 'Impressions': 3216, 'Clicks': 140, 'Installs': 100, 'Spend': 490.0, 'CPI': 4.90, 'InstallRate': 0.71, 'Recommendation': 'Add as exact match', 'Suggested Bid': 3.5},
-        {'Search Term': 'testimony', 'Triggered By': 'testimonial (broad)', 'Impressions': 42, 'Clicks': 9, 'Installs': 5, 'Spend': 22.5, 'CPI': 4.50, 'InstallRate': 0.56, 'Recommendation': 'Add as exact match', 'Suggested Bid': 2.5},
-        {'Search Term': 'rating app', 'Triggered By': 'product rating (broad)', 'Impressions': 21, 'Clicks': 3, 'Installs': 2, 'Spend': 13.5, 'CPI': 6.75, 'InstallRate': 0.67, 'Recommendation': 'Add as exact match', 'Suggested Bid': 3.5},
-        {'Search Term': 'feedbacks', 'Triggered By': 'customer feedback (broad)', 'Impressions': 27, 'Clicks': 5, 'Installs': 3, 'Spend': 25.0, 'CPI': 8.33, 'InstallRate': 0.60, 'Recommendation': 'Add as exact match', 'Suggested Bid': 3.0},
-        {'Search Term': 'rate me', 'Triggered By': 'product rating (broad)', 'Impressions': 8, 'Clicks': 5, 'Installs': 3, 'Spend': 22.5, 'CPI': 7.50, 'InstallRate': 0.60, 'Recommendation': 'Add as exact match', 'Suggested Bid': 4.0},
-        {'Search Term': 'testimonial showcase', 'Triggered By': 'testimonial (broad)', 'Impressions': 6, 'Clicks': 1, 'Installs': 1, 'Spend': 2.5, 'CPI': 2.50, 'InstallRate': 1.0, 'Recommendation': 'Add as exact match', 'Suggested Bid': 2.5},
-    ])
+    for c in ["Impressions", "Clicks", "Installs", "Spend", "Bid", "Customers", "Revenue"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
+    for c in ["CPI", "ROAS", "InstallRate", "AvgPos", "CTR", "CPC"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
 
 
-def load_data():
-    """Load data from session state or defaults"""
-    if 'data_loaded' not in st.session_state:
-        st.session_state.data_loaded = True
-        st.session_state.df_campaigns = get_default_campaign_data()
-        st.session_state.df_kw_product_review = get_default_keywords_product_review()
-        st.session_state.df_kw_competitors = get_default_keywords_competitors()
-        st.session_state.df_kw_review_variations = get_default_keywords_review_variations()
-        st.session_state.df_kw_features = get_default_keywords_features()
-        st.session_state.df_new_keywords = get_default_new_keywords()
-        st.session_state.df_keywords_to_pause = get_default_keywords_to_pause()
-        st.session_state.df_bid_increases = get_default_bid_increases()
-        st.session_state.df_search_opportunities = get_default_search_opportunities()
-        st.session_state.data_period = "Aug 21, 2025 - Feb 18, 2026"
+@st.cache_data
+def load_search_terms(files):
+    dfs = []
+    for fname in files:
+        p = DATA_DIR / fname
+        if not p.exists():
+            continue
+        df = pd.read_csv(p)
+        df["Campaign"] = df["Ad Name"].map(CAMPAIGN_MAP).fillna(df["Ad Name"])
+        dfs.append(df)
+    if not dfs:
+        return pd.DataFrame()
+    out = pd.concat(dfs, ignore_index=True)
+    out = out.rename(columns={
+        "Match Type": "Match",
+        "Install Rate": "InstallRate",
+        "Cost Per Install": "CPI",
+        "Return On Spend": "ROAS",
+    })
+    for c in ["Impressions", "Clicks", "Installs", "Spend"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
+    for c in ["CPI", "ROAS", "InstallRate"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
 
 
-def process_keywords_upload(uploaded_file, campaign_name):
-    """Process uploaded keywords CSV file"""
-    try:
-        df = pd.read_csv(uploaded_file)
+def build_comparison(p1, p2):
+    """Merge P1 and P2 keyword data into a side-by-side comparison DataFrame."""
+    def agg(df, prefix):
+        g = df.groupby(["Keyword", "Match", "Campaign"], as_index=False).agg(
+            Impressions=("Impressions", "sum"),
+            Installs=("Installs", "sum"),
+            Spend=("Spend", "sum"),
+            Days=("_days", "first"),
+            Bid=("Bid", "last"),
+        )
+        g["IPD"] = g["Installs"] / g["Days"]
+        g["CPI"] = g.apply(lambda r: r.Spend / r.Installs if r.Installs > 0 else None, axis=1)
+        return g.rename(columns={
+            c: f"{prefix}_{c}" for c in ["Impressions", "Installs", "Spend", "Days", "Bid", "IPD", "CPI"]
+        })
 
-        # Expected columns from Shopify export
-        column_mapping = {
-            'Keyword': 'Keyword',
-            'Match Type': 'Match',
-            'Bid': 'Bid',
-            'Impressions': 'Impressions',
-            'Clicks': 'Clicks',
-            'Installs': 'Installs',
-            'Spend': 'Spend',
-            'Cost Per Install': 'CPI',
-            'Install Rate': 'InstallRate',
-            'Return On Spend': 'ROAS'
-        }
+    a1 = agg(p1, "P1") if not p1.empty else pd.DataFrame()
+    a2 = agg(p2, "P2") if not p2.empty else pd.DataFrame()
 
-        # Rename columns if they exist
-        df = df.rename(columns={k: v for k, v in column_mapping.items() if k in df.columns})
+    if a1.empty or a2.empty:
+        return pd.DataFrame()
 
-        # Calculate CPI if not present
-        if 'CPI' not in df.columns and 'Spend' in df.columns and 'Installs' in df.columns:
-            df['CPI'] = df.apply(lambda x: x['Spend'] / x['Installs'] if x['Installs'] > 0 else 0, axis=1)
+    comp = pd.merge(a1, a2, on=["Keyword", "Match", "Campaign"], how="outer")
 
-        return df, None
-    except Exception as e:
-        return None, str(e)
+    # Identify which keywords were new vs existing vs bid-increased
+    p1_keys = set(zip(p1["Keyword"].str.lower(), p1["Match"].str.lower()))
+    p2_keys = set(zip(p2["Keyword"].str.lower(), p2["Match"].str.lower()))
 
+    def get_status(row):
+        kw = (str(row["Keyword"]).lower(), str(row["Match"]).lower())
+        in_p1 = kw in p1_keys
+        in_p2 = kw in p2_keys
+        if in_p2 and not in_p1:
+            return "New Keyword"
+        if in_p1 and not in_p2:
+            return "Not in P2"
+        if kw in BID_INCREASED:
+            return "Bid Increased"
+        return "Existing"
 
-def process_campaign_metrics_upload(uploaded_file):
-    """Process uploaded campaign metrics CSV file"""
-    try:
-        df = pd.read_csv(uploaded_file)
+    comp["Status"] = comp.apply(get_status, axis=1)
 
-        # Aggregate by campaign/ad name
-        if 'Ad Name' in df.columns:
-            agg_df = df.groupby('Ad Name').agg({
-                'Spend': 'sum',
-                'Installs': 'sum',
-                'Customers': 'sum',
-                'Revenue': 'sum',
-                'Clicks': 'sum',
-                'Impressions': 'sum'
-            }).reset_index()
+    # Fill numeric NaNs
+    for c in ["P1_Impressions", "P1_Installs", "P1_Spend", "P1_IPD",
+              "P2_Impressions", "P2_Installs", "P2_Spend", "P2_IPD"]:
+        if c in comp.columns:
+            comp[c] = comp[c].fillna(0)
 
-            agg_df['Campaign'] = agg_df['Ad Name']
-            agg_df['Total Spend'] = agg_df['Spend']
-            agg_df['Total Installs'] = agg_df['Installs']
-            agg_df['Avg CPI'] = agg_df.apply(lambda x: x['Spend'] / x['Installs'] if x['Installs'] > 0 else 0, axis=1)
-            agg_df['Avg Install Rate'] = agg_df.apply(lambda x: x['Installs'] / x['Clicks'] if x['Clicks'] > 0 else 0, axis=1)
-            agg_df['Total Customers'] = agg_df['Customers']
-            agg_df['Total Revenue'] = agg_df['Revenue']
-            agg_df['ROAS'] = agg_df.apply(lambda x: (x['Revenue'] / x['Spend'] * 100) if x['Spend'] > 0 else 0, axis=1)
-
-            return agg_df[['Campaign', 'Total Spend', 'Total Installs', 'Avg CPI', 'Avg Install Rate', 'Total Customers', 'Total Revenue', 'ROAS']], None
-
-        return None, "Missing 'Ad Name' column"
-    except Exception as e:
-        return None, str(e)
+    # Deltas
+    comp["Delta_IPD"] = comp["P2_IPD"] - comp["P1_IPD"]
+    comp["Delta_IPD_Pct"] = comp.apply(
+        lambda r: (r["P2_IPD"] / r["P1_IPD"] - 1) * 100
+        if (r["P1_IPD"] > 0 and pd.notna(r.get("P2_IPD")))
+        else None,
+        axis=1,
+    )
+    comp["Delta_CPI"] = comp.apply(
+        lambda r: r["P2_CPI"] - r["P1_CPI"]
+        if pd.notna(r.get("P1_CPI")) and pd.notna(r.get("P2_CPI"))
+        else None,
+        axis=1,
+    )
+    return comp
 
 
 # ============================================================================
-# MAIN APP
+# HELPER: colour a delta value
 # ============================================================================
-
-# Load data
-load_data()
-
-# Check authentication
-if not check_auth():
-    st.stop()
-
-# ============================================================================
-# SIDEBAR
-# ============================================================================
-
-st.sidebar.title("Judge.me Ads Dashboard")
-
-# User info (if authenticated)
-if st.session_state.get('user_email'):
-    st.sidebar.markdown(f"👤 {st.session_state.user_email}")
-    st.sidebar.markdown("---")
-
-st.sidebar.markdown("**Navigation**")
-
-page = st.sidebar.radio(
-    "Select Section:",
-    ["Executive Summary", "Campaign Performance", "Keyword Analysis",
-     "New Keywords", "Keywords to Pause", "Bid Recommendations",
-     "Search Term Opportunities", "Negative Keywords", "Action Checklist",
-     "📤 Upload Data"]
-)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown(f"**Data Period:**")
-st.sidebar.markdown(st.session_state.get('data_period', 'Aug 21, 2025 - Feb 18, 2026'))
-st.sidebar.markdown("**Focus:**")
-st.sidebar.markdown("Keyword Discovery for Install Growth")
+def delta_arrow(val, invert=False):
+    """Return a coloured string for a numeric delta."""
+    if val is None or pd.isna(val):
+        return "—"
+    good = val > 0 if not invert else val < 0
+    symbol = "▲" if val > 0 else "▼"
+    color = "green" if good else "red"
+    return f"<span style='color:{color}'>{symbol} {abs(val):.1f}</span>"
 
 
 # ============================================================================
 # PAGES
 # ============================================================================
 
-if page == "📤 Upload Data":
-    st.title("📤 Upload New Data")
-    st.markdown("### Update dashboard with new monthly data")
+def page_before_after(p1, p2, comp):
+    st.title("Before vs After: Impact of Keyword Changes")
+    st.caption("Comparing daily install rates — P1 (181 days, pre-changes) vs P2 (22 days, post-changes)")
 
-    st.info("Upload CSV files exported from Shopify App Store Ads to update the dashboard data.")
+    if comp.empty:
+        st.error("Comparison data not available.")
+        return
 
-    # Data period
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("Period Start Date")
-    with col2:
-        end_date = st.date_input("Period End Date")
+    # ── Top metrics ──────────────────────────────────────────────────────────
+    # Only compare campaigns present in both periods
+    p2_campaigns = set(p2["Campaign"].unique())
+    p1_comp = p1[p1["Campaign"].isin(p2_campaigns)]
 
-    if st.button("Update Period"):
-        st.session_state.data_period = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
-        st.success(f"Period updated to: {st.session_state.data_period}")
+    p1_ipd_total = p1_comp.groupby("Campaign").apply(
+        lambda g: g["Installs"].sum() / g["_days"].iloc[0], include_groups=False
+    ).sum()
+    p2_ipd_total = p2.groupby("Campaign").apply(
+        lambda g: g["Installs"].sum() / g["_days"].iloc[0], include_groups=False
+    ).sum()
 
-    st.markdown("---")
+    p1_cpi_total = p1_comp["Spend"].sum() / p1_comp["Installs"].sum() if p1_comp["Installs"].sum() > 0 else 0
+    p2_cpi_total = p2["Spend"].sum() / p2["Installs"].sum() if p2["Installs"].sum() > 0 else 0
 
-    # Campaign Metrics Upload
-    st.subheader("1. Campaign Metrics (Daily)")
-    st.markdown("Upload: `shopify-app-store-ads-campaign-metrics-by-day.csv`")
+    p1_spend_day = p1_comp.groupby("Campaign").apply(
+        lambda g: g["Spend"].sum() / g["_days"].iloc[0], include_groups=False
+    ).sum()
+    p2_spend_day = p2.groupby("Campaign").apply(
+        lambda g: g["Spend"].sum() / g["_days"].iloc[0], include_groups=False
+    ).sum()
 
-    campaign_file = st.file_uploader("Campaign Metrics CSV", type=['csv'], key='campaign_upload')
+    new_kw_with_installs = comp[
+        (comp["Status"] == "New Keyword") & (comp["P2_Installs"] > 0)
+    ]
 
-    if campaign_file:
-        df, error = process_campaign_metrics_upload(campaign_file)
-        if error:
-            st.error(f"Error: {error}")
-        else:
-            st.success(f"Loaded {len(df)} campaigns")
-            st.dataframe(df)
-            if st.button("Apply Campaign Data"):
-                st.session_state.df_campaigns = df
-                st.success("Campaign data updated!")
-
-    st.markdown("---")
-
-    # Keywords Upload
-    st.subheader("2. Keywords Data")
-    st.markdown("Upload: `shopify-app-store-ads-keywords.csv`")
-
-    campaign_select = st.selectbox(
-        "Select Campaign for Keywords:",
-        ["ProductReview", "Competitors", "Review-variations", "Features"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Installs / Day",
+        f"{p2_ipd_total:.1f}",
+        delta=f"{p2_ipd_total - p1_ipd_total:+.1f} vs P1 ({p1_ipd_total:.1f})",
+        delta_color="normal",
+    )
+    c2.metric(
+        "Avg CPI",
+        f"${p2_cpi_total:.2f}",
+        delta=f"{p2_cpi_total - p1_cpi_total:+.2f} vs P1 (${p1_cpi_total:.2f})",
+        delta_color="inverse",
+    )
+    c3.metric(
+        "Spend / Day",
+        f"${p2_spend_day:.0f}",
+        delta=f"{p2_spend_day - p1_spend_day:+.0f} vs P1 (${p1_spend_day:.0f})",
+        delta_color="inverse",
+    )
+    c4.metric(
+        "New KWs with Installs",
+        f"{len(new_kw_with_installs)}",
+        delta=f"{int(new_kw_with_installs['P2_Installs'].sum())} installs so far",
+        delta_color="normal",
     )
 
-    keywords_file = st.file_uploader("Keywords CSV", type=['csv'], key='keywords_upload')
+    st.info(
+        f"⚠️ **Note:** Review-variations campaign data not available for P2. "
+        f"Comparison above excludes it from both periods for a fair apples-to-apples view."
+    )
 
-    if keywords_file:
-        df, error = process_keywords_upload(keywords_file, campaign_select)
-        if error:
-            st.error(f"Error: {error}")
+    st.markdown("---")
+
+    # ── Campaign installs/day bar chart ──────────────────────────────────────
+    st.subheader("Installs / Day by Campaign")
+
+    camp_rows = []
+    for camp in sorted(p2_campaigns):
+        g1 = p1[p1["Campaign"] == camp]
+        g2 = p2[p2["Campaign"] == camp]
+        if not g1.empty:
+            camp_rows.append({"Campaign": camp, "Period": P1_LABEL,
+                               "Installs/Day": g1["Installs"].sum() / g1["_days"].iloc[0]})
+        if not g2.empty:
+            camp_rows.append({"Campaign": camp, "Period": P2_LABEL,
+                               "Installs/Day": g2["Installs"].sum() / g2["_days"].iloc[0]})
+
+    camp_df = pd.DataFrame(camp_rows)
+    fig = px.bar(
+        camp_df, x="Campaign", y="Installs/Day", color="Period", barmode="group",
+        color_discrete_map={P1_LABEL: "#6c8ebf", P2_LABEL: "#82b366"},
+        title="Daily install rate before vs after keyword changes",
+    )
+    fig.update_layout(yaxis_title="Installs per Day", legend_title="Period")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Keyword comparison table ──────────────────────────────────────────────
+    st.subheader("Keyword-Level Comparison")
+
+    status_filter = st.multiselect(
+        "Filter by status:",
+        ["Existing", "Bid Increased", "New Keyword", "Not in P2"],
+        default=["Existing", "Bid Increased", "New Keyword"],
+    )
+    campaign_filter = st.multiselect(
+        "Filter by campaign:",
+        sorted(comp["Campaign"].dropna().unique()),
+        default=sorted(comp["Campaign"].dropna().unique()),
+    )
+
+    view = comp[
+        comp["Status"].isin(status_filter) & comp["Campaign"].isin(campaign_filter)
+    ].copy()
+    view = view.sort_values("P2_IPD", ascending=False)
+
+    display_cols = {
+        "Keyword": "Keyword",
+        "Match": "Match",
+        "Campaign": "Campaign",
+        "Status": "Status",
+        "P1_IPD": "P1 Installs/Day",
+        "P2_IPD": "P2 Installs/Day",
+        "Delta_IPD_Pct": "Change %",
+        "P1_CPI": "P1 CPI",
+        "P2_CPI": "P2 CPI",
+        "P1_Bid": "P1 Bid",
+        "P2_Bid": "P2 Bid",
+    }
+    disp = view[[c for c in display_cols if c in view.columns]].rename(columns=display_cols)
+
+    for col in ["P1 Installs/Day", "P2 Installs/Day"]:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+    for col in ["P1 CPI", "P2 CPI"]:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    for col in ["P1 Bid", "P2 Bid"]:
+        if col in disp.columns:
+            disp[col] = disp[col].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    if "Change %" in disp.columns:
+        disp["Change %"] = disp["Change %"].apply(
+            lambda x: f"+{x:.0f}%" if (pd.notna(x) and x > 0) else (f"{x:.0f}%" if pd.notna(x) else "NEW")
+        )
+
+    st.dataframe(disp, use_container_width=True)
+
+
+def page_new_keywords(p1, p2, comp):
+    st.title("New Keywords Status")
+    st.caption("Keywords added after Feb 24, 2026 — how are they performing after 22 days?")
+
+    if comp.empty:
+        st.error("No data available.")
+        return
+
+    p1_keys = set(zip(p1["Keyword"].str.lower(), p1["Match"].str.lower()))
+    new = p2[p2.apply(lambda r: (r["Keyword"].lower(), r["Match"].lower()) not in p1_keys, axis=1)].copy()
+
+    if new.empty:
+        st.info("No new keywords detected in P2.")
+        return
+
+    active = new[new["Installs"] > 0]
+    getting_impressions = new[(new["Impressions"] > 0) & (new["Installs"] == 0)]
+    dormant = new[new["Impressions"] == 0]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total New Keywords", len(new))
+    c2.metric("Getting Installs ✅", len(active), delta=f"{int(active['Installs'].sum())} installs total")
+    c3.metric("Impressions, No Installs ⚠️", len(getting_impressions))
+    c4.metric("Zero Impressions ❌", len(dormant))
+
+    st.markdown("---")
+
+    tab1, tab2, tab3 = st.tabs(["✅ Getting Installs", "⚠️ Getting Impressions Only", "❌ Zero Impressions"])
+
+    with tab1:
+        if active.empty:
+            st.info("No new keywords with installs yet.")
         else:
-            st.success(f"Loaded {len(df)} keywords")
-            st.dataframe(df)
-            if st.button("Apply Keywords Data"):
-                if campaign_select == "ProductReview":
-                    st.session_state.df_kw_product_review = df
-                elif campaign_select == "Competitors":
-                    st.session_state.df_kw_competitors = df
-                elif campaign_select == "Review-variations":
-                    st.session_state.df_kw_review_variations = df
-                else:
-                    st.session_state.df_kw_features = df
-                st.success(f"{campaign_select} keywords updated!")
+            d = active[["Campaign", "Keyword", "Match", "Bid", "Impressions", "Installs", "Spend", "CPI", "InstallRate"]].copy()
+            d["CPI"] = d["CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+            d["InstallRate"] = d["InstallRate"].apply(lambda x: f"{x*100:.0f}%" if pd.notna(x) else "—")
+            d["Spend"] = d["Spend"].apply(lambda x: f"${x:.0f}")
+            d["Bid"] = d["Bid"].apply(lambda x: f"${x:.2f}")
+            d = d.sort_values("Installs", ascending=False)
+            st.dataframe(d, use_container_width=True)
+
+            st.subheader("Installs by New Keyword")
+            fig = px.bar(
+                active.sort_values("Installs", ascending=True),
+                x="Installs", y="Keyword", orientation="h",
+                color="Campaign", title="New keywords ranked by installs (22 days)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        if getting_impressions.empty:
+            st.info("No keywords in this state.")
+        else:
+            d = getting_impressions[["Campaign", "Keyword", "Match", "Bid", "Impressions", "Clicks"]].copy()
+            d["Bid"] = d["Bid"].apply(lambda x: f"${x:.2f}")
+            st.dataframe(d.sort_values("Impressions", ascending=False), use_container_width=True)
+            st.warning("These keywords are showing but not converting — may need better ad copy or lower bid expectations.")
+
+    with tab3:
+        if dormant.empty:
+            st.info("All new keywords are getting impressions!")
+        else:
+            d = dormant[["Campaign", "Keyword", "Match", "Bid", "Status"]].copy() if "Status" in dormant.columns else dormant[["Campaign", "Keyword", "Match", "Bid"]].copy()
+            d["Bid"] = d["Bid"].apply(lambda x: f"${x:.2f}")
+            d = d.sort_values(["Campaign", "Bid"], ascending=[True, False])
+            st.dataframe(d, use_container_width=True)
+            st.error(
+                "Zero impressions after 22 days = bids too low to win any auctions. "
+                "Either raise bids to $2.50–$3.00 minimum, or these terms have very low search volume."
+            )
+
+
+def page_bid_impact(comp):
+    st.title("Bid Increase Impact")
+    st.caption("12 keywords had their bids raised — here's what changed.")
+
+    if comp.empty:
+        st.error("No comparison data available.")
+        return
+
+    bid_df = comp[comp["Status"] == "Bid Increased"].copy()
+
+    if bid_df.empty:
+        st.info("No bid-increased keywords found in data.")
+        return
+
+    # Summary metrics
+    improved = bid_df[bid_df["Delta_IPD"] > 0]
+    declined = bid_df[bid_df["Delta_IPD"] < 0]
+    avg_cpi_increase = bid_df["Delta_CPI"].mean()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Keywords with Bid Increase", len(bid_df))
+    c2.metric("Volume Improved ✅", len(improved))
+    c3.metric("Volume Declined ❌", len(declined))
+    c4.metric(
+        "Avg CPI Change",
+        f"+${avg_cpi_increase:.2f}" if pd.notna(avg_cpi_increase) else "—",
+        delta="higher cost per install",
+        delta_color="inverse",
+    )
 
     st.markdown("---")
 
-    # Search Terms Upload
-    st.subheader("3. Search Terms Data")
-    st.markdown("Upload: `shopify-app-store-ads-search-terms.csv`")
+    # Side-by-side bar chart: installs/day before vs after
+    chart_data = []
+    for _, r in bid_df.iterrows():
+        chart_data.append({"Keyword": r["Keyword"], "Period": P1_LABEL, "Installs/Day": r["P1_IPD"]})
+        chart_data.append({"Keyword": r["Keyword"], "Period": P2_LABEL, "Installs/Day": r["P2_IPD"]})
 
-    search_file = st.file_uploader("Search Terms CSV", type=['csv'], key='search_upload')
-
-    if search_file:
-        try:
-            df = pd.read_csv(search_file)
-            st.success(f"Loaded {len(df)} search terms")
-            st.dataframe(df.head(20))
-            st.info("Search terms analysis will be added in future updates")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    st.markdown("---")
-
-    # Reset to defaults
-    st.subheader("Reset Data")
-    if st.button("Reset to Default Data", type="secondary"):
-        st.session_state.data_loaded = False
-        load_data()
-        st.success("Data reset to defaults!")
-        st.rerun()
-
-elif page == "Executive Summary":
-    st.title("Judge.me Shopify Ads Analysis")
-    st.markdown("### Executive Summary - Keyword Discovery for Install Growth")
-
-    df_campaigns = st.session_state.df_campaigns
-
-    # Key Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Spend", f"${df_campaigns['Total Spend'].sum():,.0f}")
-    with col2:
-        st.metric("Total Installs", f"{df_campaigns['Total Installs'].sum():,}")
-    with col3:
-        avg_cpi = df_campaigns['Total Spend'].sum() / df_campaigns['Total Installs'].sum()
-        st.metric("Average CPI", f"${avg_cpi:.2f}")
-    with col4:
-        overall_roas = df_campaigns['Total Revenue'].sum() / df_campaigns['Total Spend'].sum() * 100
-        st.metric("Overall ROAS", f"{overall_roas:.1f}%")
-
-    st.markdown("---")
-
-    # Key Findings
-    st.subheader("Key Findings for Install Growth")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("""
-        **Top Performing Keywords (by Install Volume):**
-        1. `reviews` (exact) - 4,594 installs, $3.01 CPI
-        2. `review` (exact) - 3,201 installs, $1.92 CPI
-        3. `product review` (broad) - 2,033 installs
-        4. `amazon reviews importer` - 1,356 installs
-        5. `product reviews` (exact) - 1,244 installs
-
-        **Highest ROAS Keywords:**
-        1. `yotpo reviews` - 341% ROAS
-        2. `loox - photo reviews` - 190% ROAS
-        3. `okendo` - 151.5% ROAS
-        4. `loox review` - 76.1% ROAS
-        5. `customer reviews` - 60.6% ROAS
-        """)
-
-    with col2:
-        st.markdown(f"""
-        **Immediate Keyword Opportunities:**
-        - **{len(st.session_state.df_new_keywords)} new keywords** identified for testing
-        - **{len(st.session_state.df_new_keywords[st.session_state.df_new_keywords['Priority'] == 'HIGH'])} HIGH priority** keywords ready to launch
-        - Est. **1,000+ additional installs/month** potential
-
-        **Keywords to Action:**
-        - **{len(st.session_state.df_keywords_to_pause)} keywords** to pause/reduce bid
-        - **{len(st.session_state.df_bid_increases)} keywords** to increase bid
-        - Estimated savings: **$300-500/month** reallocation
-
-        **Competitor Gaps:**
-        - `stamped.io` - Not targeted (major competitor)
-        - `fera reviews` - Untapped opportunity
-        - `vitals reviews` - Growing segment
-        """)
-
-    st.markdown("---")
-
-    # Campaign Overview Chart
-    st.subheader("Campaign Performance Overview")
+    chart_df = pd.DataFrame(chart_data)
+    chart_df = chart_df.sort_values(
+        "Installs/Day",
+        ascending=True,
+    )
 
     fig = px.bar(
-        df_campaigns,
-        x='Campaign',
-        y=['Total Installs', 'Total Customers'],
-        barmode='group',
-        title='Installs vs Customers by Campaign',
-        color_discrete_sequence=['#4CAF50', '#2196F3']
+        chart_df,
+        x="Installs/Day",
+        y="Keyword",
+        color="Period",
+        barmode="group",
+        orientation="h",
+        color_discrete_map={P1_LABEL: "#6c8ebf", P2_LABEL: "#82b366"},
+        title="Installs per day — before vs after bid increase",
+        height=500,
     )
-    fig.update_layout(xaxis_tickangle=-45)
     st.plotly_chart(fig, use_container_width=True)
 
-elif page == "Campaign Performance":
-    st.title("Campaign Performance Analysis")
+    st.markdown("---")
+    st.subheader("Detail Table")
 
-    df_campaigns = st.session_state.df_campaigns
+    d = bid_df[[
+        "Keyword", "Match", "Campaign",
+        "P1_Bid", "P2_Bid",
+        "P1_IPD", "P2_IPD", "Delta_IPD_Pct",
+        "P1_CPI", "P2_CPI", "Delta_CPI",
+    ]].copy().sort_values("Delta_IPD_Pct", ascending=False)
 
-    st.subheader("All Campaigns Summary")
-
-    df_display = df_campaigns.copy()
-    df_display['Total Spend'] = df_display['Total Spend'].apply(lambda x: f"${x:,.2f}")
-    df_display['Avg CPI'] = df_display['Avg CPI'].apply(lambda x: f"${x:.2f}")
-    df_display['Avg Install Rate'] = df_display['Avg Install Rate'].apply(lambda x: f"{x*100:.1f}%")
-    df_display['Total Revenue'] = df_display['Total Revenue'].apply(lambda x: f"${x:,.2f}")
-    df_display['ROAS'] = df_display['ROAS'].apply(lambda x: f"{x:.1f}%")
-
-    st.dataframe(df_display, use_container_width=True)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        fig = px.pie(
-            df_campaigns,
-            values='Total Installs',
-            names='Campaign',
-            title='Install Distribution by Campaign',
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        fig = px.bar(
-            df_campaigns,
-            x='Campaign',
-            y='ROAS',
-            title='ROAS by Campaign (%)',
-            color='ROAS',
-            color_continuous_scale='RdYlGn'
-        )
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
-
-elif page == "Keyword Analysis":
-    st.title("Keyword Performance Analysis")
-
-    campaign_select = st.selectbox(
-        "Select Campaign:",
-        ["ProductReview", "Competitors", "Review-variations", "Features"]
+    d["P1_Bid"] = d["P1_Bid"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    d["P2_Bid"] = d["P2_Bid"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    d["P1_IPD"] = d["P1_IPD"].apply(lambda x: f"{x:.2f}")
+    d["P2_IPD"] = d["P2_IPD"].apply(lambda x: f"{x:.2f}")
+    d["Delta_IPD_Pct"] = d["Delta_IPD_Pct"].apply(
+        lambda x: f"+{x:.0f}%" if (pd.notna(x) and x > 0) else (f"{x:.0f}%" if pd.notna(x) else "—")
+    )
+    d["P1_CPI"] = d["P1_CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    d["P2_CPI"] = d["P2_CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    d["Delta_CPI"] = d["Delta_CPI"].apply(
+        lambda x: f"+${x:.2f}" if (pd.notna(x) and x > 0) else (f"${x:.2f}" if pd.notna(x) else "—")
     )
 
-    if campaign_select == "ProductReview":
-        df_selected = st.session_state.df_kw_product_review
-    elif campaign_select == "Competitors":
-        df_selected = st.session_state.df_kw_competitors
-    elif campaign_select == "Review-variations":
-        df_selected = st.session_state.df_kw_review_variations
+    d = d.rename(columns={
+        "P1_Bid": "Old Bid", "P2_Bid": "New Bid",
+        "P1_IPD": "P1 Installs/Day", "P2_IPD": "P2 Installs/Day",
+        "Delta_IPD_Pct": "Volume Δ",
+        "P1_CPI": "P1 CPI", "P2_CPI": "P2 CPI", "Delta_CPI": "CPI Δ",
+    })
+    st.dataframe(d, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("Interpretation")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.success("**Working well (increase volume without huge CPI penalty):**")
+        st.markdown("""
+- `shopify product reviews` — **+195%** volume, CPI went $1.16 → $2.24 (still cheap)
+- `trustoo reviews` — **+338%** (small volume but confirmed it's alive)
+- `yotpo reviews` — **+136%** (small volume)
+- `review` (exact) — **+21%** at massive scale (17→21/day = 3.7 extra installs/day)
+- `reviews importer` — **+83%** volume
+- `review importer` — **+69%** volume
+""")
+    with col2:
+        st.error("**Unexpected declines — investigate:**")
+        st.markdown("""
+- `loox - photo reviews` — **disappeared** (was 0.09/day, now 0)
+- `rivo reviews` — **disappeared** (was 0.14/day, now 0)
+- `customer reviews` — **-54%** (was 0.40/day, now 0.18/day)
+- `loox review` — **-40%** (was 0.46/day, now 0.27/day)
+
+These may be losing auctions to competitors at the higher bid level, or budget is being reallocated internally. Consider lowering bids back slightly to test.
+""")
+
+
+def page_recommendations(p1, p2, comp, search_df):
+    st.title("Data-Driven Recommendations")
+    st.caption("Based on 22 days of post-change data (Feb 24 – Mar 17, 2026)")
+
+    st.markdown("---")
+
+    # ── SECTION 1: Pause ──────────────────────────────────────────────────────
+    st.subheader("🔴 Pause These Keywords Now")
+    st.markdown("Confirmed underperformers — 22 days of data is enough to act.")
+
+    pause_data = [
+        {
+            "Keyword": "carousel", "Match": "broad", "Campaign": "Features",
+            "P2 CPI": "$19.50", "P2 Installs": 4, "P2 Spend": "$78",
+            "Reason": "Highest CPI in entire account. 22 days, 4 installs. Stop.",
+        },
+        {
+            "Keyword": "q&a", "Match": "broad", "Campaign": "Features",
+            "P2 CPI": "—", "P2 Installs": 0, "P2 Spend": "$12",
+            "Reason": "Zero installs. Always been bad. Confirmed waste.",
+        },
+        {
+            "Keyword": "rich snippet", "Match": "broad", "Campaign": "Features",
+            "P2 CPI": "—", "P2 Installs": 0, "P2 Spend": "$5",
+            "Reason": "Zero installs both periods. The term doesn't convert.",
+        },
+        {
+            "Keyword": "question", "Match": "broad", "Campaign": "Trust",
+            "P2 CPI": "—", "P2 Installs": 0, "P2 Spend": "$16",
+            "Reason": "Zero installs on 74 impressions. 0% install rate.",
+        },
+        {
+            "Keyword": "google reviews", "Match": "exact", "Campaign": "ProductReview",
+            "P2 CPI": "$9.11", "P2 Installs": 45, "P2 Spend": "$410",
+            "Reason": "3× the account avg CPI. High spend, low return. Still burning $19/day.",
+        },
+        {
+            "Keyword": "google review", "Match": "exact", "Campaign": "ProductReview",
+            "P2 CPI": "$8.61", "P2 Installs": 18, "P2 Spend": "$155",
+            "Reason": "Same story as 'google reviews'. High CPI, confirmed across both periods.",
+        },
+    ]
+    st.dataframe(pd.DataFrame(pause_data), use_container_width=True)
+
+    pause_spend = 78 + 12 + 5 + 16 + 410 + 155
+    pause_daily = round(pause_spend / 22)
+    st.error(
+        f"💸 Pausing these 6 keywords frees up ~**${pause_daily}/day** "
+        f"(${pause_spend} spent in 22 days) to reallocate to what's working."
+    )
+
+    st.markdown("---")
+
+    # ── SECTION 2: Scale Winners ───────────────────────────────────────────────
+    st.subheader("🟢 Scale These — They're Working")
+
+    scale_data = [
+        {
+            "Keyword": "shopify product reviews", "Match": "exact", "Campaign": "ProductReview",
+            "Action": "Increase bid $2.00 → $2.50",
+            "Why": "+195% installs after bid increase. CPI still only $2.24. Best ROI of all bid changes.",
+        },
+        {
+            "Keyword": "review widget", "Match": "broad", "Campaign": "ProductReview",
+            "Action": "Increase bid $4.00 → $5.00",
+            "Why": "111 installs in 22 days. This keyword didn't exist in P1. Prove it scales.",
+        },
+        {
+            "Keyword": "stars", "Match": "broad", "Campaign": "Trust",
+            "Action": "Increase bid $5.00 → $7.00",
+            "Why": "84% install rate — highest in the Trust campaign. Only 264 impressions. Much more headroom.",
+        },
+        {
+            "Keyword": "review", "Match": "exact", "Campaign": "ProductReview",
+            "Action": "Consider bid $2.00 → $2.50",
+            "Why": "+21% volume after last increase. At 21 installs/day, even +2/day is significant.",
+        },
+        {
+            "Keyword": "loox reviews", "Match": "exact", "Campaign": "Competitors",
+            "Action": "Increase bid $3.50 → $4.50",
+            "Why": "New keyword, 10 installs in 22 days at $4.55 CPI. Signal is positive, increase budget.",
+        },
+    ]
+    st.dataframe(pd.DataFrame(scale_data), use_container_width=True)
+
+    st.markdown("---")
+
+    # ── SECTION 3: Fix Low-Bid Dormant Keywords ────────────────────────────────
+    st.subheader("🟡 Fix Dormant Keywords (Bids Too Low)")
+    st.markdown(
+        "Many new competitor keywords were added at **$1.00 bid** and have zero impressions. "
+        "At $1 you can't win any auctions. Either raise them or accept they won't run."
+    )
+
+    p1_keys = set(zip(p1["Keyword"].str.lower(), p1["Match"].str.lower()))
+    dormant_low = p2[
+        (p2["Impressions"] == 0) &
+        (p2["Bid"] <= 1.5) &
+        p2.apply(lambda r: (r["Keyword"].lower(), r["Match"].lower()) not in p1_keys, axis=1)
+    ].copy()
+
+    if not dormant_low.empty:
+        st.markdown(f"**{len(dormant_low)} keywords at ≤$1.50 bid with zero impressions.**")
+        d = dormant_low[["Campaign", "Keyword", "Match", "Bid"]].copy()
+        d["Bid"] = d["Bid"].apply(lambda x: f"${x:.2f}")
+        d["Recommendation"] = "Raise to $2.50 or pause if low-priority"
+        st.dataframe(d.sort_values(["Campaign", "Keyword"]), use_container_width=True)
+
+    st.markdown("---")
+
+    # ── SECTION 4: Search Term Opportunities ──────────────────────────────────
+    st.subheader("🔵 New Search Term Opportunities (P2)")
+
+    if not search_df.empty:
+        # Find search terms not yet in keyword list
+        p2_keywords = set(p2["Keyword"].str.lower())
+        opp = search_df[
+            (~search_df["Search Term"].str.lower().isin(p2_keywords)) &
+            (search_df["Installs"] >= 3)
+        ].copy()
+
+        if not opp.empty:
+            cols = [c for c in ["Campaign", "Search Term", "Keyword", "Match", "Impressions", "Installs", "CPI", "InstallRate"] if c in opp.columns]
+            opp_disp = opp[cols].copy()
+            if "CPI" in opp_disp.columns:
+                opp_disp["CPI"] = opp_disp["CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+            if "InstallRate" in opp_disp.columns:
+                opp_disp["InstallRate"] = opp_disp["InstallRate"].apply(lambda x: f"{x*100:.0f}%" if pd.notna(x) else "—")
+            opp_disp = opp_disp.sort_values("Installs", ascending=False)
+            st.markdown("Search terms generating installs that aren't yet exact match keywords:")
+            st.dataframe(opp_disp, use_container_width=True)
+        else:
+            st.info("No new high-volume search term opportunities identified.")
     else:
-        df_selected = st.session_state.df_kw_features
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Keywords", len(df_selected))
-    with col2:
-        st.metric("Total Installs", f"{df_selected['Installs'].sum():,}")
-    with col3:
-        st.metric("Total Spend", f"${df_selected['Spend'].sum():,.2f}")
-    with col4:
-        avg_cpi = df_selected['Spend'].sum() / df_selected['Installs'].sum() if df_selected['Installs'].sum() > 0 else 0
-        st.metric("Avg CPI", f"${avg_cpi:.2f}")
-
-    st.subheader(f"All Keywords - {campaign_select} Campaign")
-
-    df_display = df_selected.copy()
-    df_display['Spend'] = df_display['Spend'].apply(lambda x: f"${x:,.2f}")
-    df_display['CPI'] = df_display['CPI'].apply(lambda x: f"${x:.2f}")
-    df_display['InstallRate'] = df_display['InstallRate'].apply(lambda x: f"{x*100:.1f}%")
-    df_display['ROAS'] = df_display['ROAS'].apply(lambda x: f"{x:.1f}%")
-
-    st.dataframe(df_display, use_container_width=True)
-
-    st.subheader("Keyword Performance Scatter")
-    fig = px.scatter(
-        df_selected,
-        x='CPI',
-        y='Installs',
-        size='Spend',
-        color='InstallRate',
-        hover_name='Keyword',
-        title='CPI vs Installs (bubble size = spend)',
-        color_continuous_scale='RdYlGn'
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-elif page == "New Keywords":
-    st.title("New Keyword Recommendations")
-    st.markdown("### Focus: Keyword Discovery for Install Growth")
-
-    df_new_keywords = st.session_state.df_new_keywords
-    high_priority = df_new_keywords[df_new_keywords['Priority'] == 'HIGH']
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total New Keywords", len(df_new_keywords))
-    with col2:
-        st.metric("HIGH Priority", len(high_priority), delta="Launch First")
-    with col3:
-        st.metric("Est. Monthly Installs", f"{df_new_keywords['Est. Installs'].sum():,}")
-    with col4:
-        avg_bid = df_new_keywords['Suggested Bid'].mean()
-        st.metric("Avg Suggested Bid", f"${avg_bid:.2f}")
+        st.info("Search term data not available.")
 
     st.markdown("---")
 
-    priority_filter = st.multiselect(
-        "Filter by Priority:",
-        ["HIGH", "MEDIUM", "LOW"],
-        default=["HIGH", "MEDIUM", "LOW"]
-    )
-
-    df_filtered = df_new_keywords[df_new_keywords['Priority'].isin(priority_filter)]
-
-    if "HIGH" in priority_filter:
-        st.subheader("HIGH Priority Keywords (Launch Immediately)")
-        high_df = df_filtered[df_filtered['Priority'] == 'HIGH']
-
-        for _, row in high_df.iterrows():
-            with st.expander(f"**{row['Keyword']}** ({row['Match Type']}) - Bid: ${row['Suggested Bid']:.2f}"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.markdown(f"**Campaign:** {row['Campaign']}")
-                with col2:
-                    st.markdown(f"**Est. Impressions:** {row['Est. Impressions']:,}")
-                with col3:
-                    st.markdown(f"**Est. Installs:** {row['Est. Installs']}")
-                st.markdown(f"**Rationale:** {row['Rationale']}")
-
-    st.subheader("All Keyword Recommendations")
-
-    df_display = df_filtered.copy()
-    df_display['Suggested Bid'] = df_display['Suggested Bid'].apply(lambda x: f"${x:.2f}")
-
-    st.dataframe(df_display, use_container_width=True)
-
-    csv = df_new_keywords.to_csv(index=False)
-    st.download_button(
-        label="Download All Recommendations as CSV",
-        data=csv,
-        file_name="judge_me_new_keywords.csv",
-        mime="text/csv"
-    )
-
-elif page == "Keywords to Pause":
-    st.title("Keywords to Pause or Reduce")
-
-    df_keywords_to_pause = st.session_state.df_keywords_to_pause
-    pause_count = len(df_keywords_to_pause[df_keywords_to_pause['Action'] == 'PAUSE'])
-    reduce_count = len(df_keywords_to_pause[df_keywords_to_pause['Action'] == 'REDUCE BID'])
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Keywords to Action", len(df_keywords_to_pause))
-    with col2:
-        st.metric("To Pause", pause_count)
-    with col3:
-        st.metric("To Reduce Bid", reduce_count)
-
-    st.markdown("---")
-
-    st.subheader("PAUSE These Keywords")
-    pause_df = df_keywords_to_pause[df_keywords_to_pause['Action'] == 'PAUSE']
-
-    for _, row in pause_df.iterrows():
-        st.error(f"**{row['Keyword']}** ({row['Match']}) - {row['Campaign']}")
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.markdown(f"Spend: ${row['Spend']:,.2f}")
-            st.markdown(f"Installs: {row['Installs']}")
-        with col2:
-            st.markdown(f"**Reason:** {row['Reason']}")
-        st.markdown("---")
-
-    st.subheader("REDUCE Bids on These Keywords")
-    reduce_df = df_keywords_to_pause[df_keywords_to_pause['Action'] == 'REDUCE BID']
-
-    for _, row in reduce_df.iterrows():
-        st.warning(f"**{row['Keyword']}** ({row['Match']}) - {row['Campaign']}")
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.markdown(f"Spend: ${row['Spend']:,.2f}")
-        with col2:
-            st.markdown(f"**Action:** {row['Reason']}")
-        st.markdown("---")
-
-elif page == "Bid Recommendations":
-    st.title("Bid Increase Recommendations")
-
-    df_bid_increases = st.session_state.df_bid_increases
+    # ── SECTION 5: Budget Reallocation Summary ────────────────────────────────
+    st.subheader("💰 Budget Reallocation Summary")
 
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("Keywords to Increase", len(df_bid_increases))
+        st.markdown("**Free up (pause underperformers):**")
+        st.markdown(f"~${pause_daily}/day from 6 keywords to pause")
     with col2:
-        avg_increase = (df_bid_increases['Recommended Bid'] - df_bid_increases['Current Bid']).mean()
-        st.metric("Avg Bid Increase", f"+${avg_increase:.2f}")
+        st.markdown("**Reallocate to (scale winners):**")
+        st.markdown("""
+- `shopify product reviews` (+$0.50 bid)
+- `review widget broad` (+$1.00 bid)
+- `stars broad` in Trust (+$2.00 bid)
+- `loox reviews` exact (+$1.00 bid)
+""")
 
-    st.markdown("---")
 
-    for _, row in df_bid_increases.iterrows():
-        increase = row['Recommended Bid'] - row['Current Bid']
+def page_keyword_analysis(p2):
+    st.title("Keyword Analysis — Current Period")
+    st.caption(f"P2: Feb 24 – Mar 17, 2026 (22 days)")
 
-        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    if p2.empty:
+        st.error("No P2 data available.")
+        return
 
-        with col1:
-            st.markdown(f"**{row['Keyword']}** ({row['Match']})")
-            st.caption(row['Campaign'])
-        with col2:
-            st.markdown(f"Current: **${row['Current Bid']:.2f}**")
-        with col3:
-            st.markdown(f"New: **${row['Recommended Bid']:.2f}**")
-        with col4:
-            st.markdown(f"<span style='color: green;'>+${increase:.2f}</span>", unsafe_allow_html=True)
+    campaign = st.selectbox("Campaign:", sorted(p2["Campaign"].unique()))
+    df = p2[p2["Campaign"] == campaign].copy()
 
-        st.caption(row['Reason'])
-        st.markdown("---")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Keywords", len(df))
+    c2.metric("Installs", f"{int(df['Installs'].sum()):,}")
+    c3.metric("Spend", f"${df['Spend'].sum():,.0f}")
+    avg_cpi = df["Spend"].sum() / df["Installs"].sum() if df["Installs"].sum() > 0 else 0
+    c4.metric("Avg CPI", f"${avg_cpi:.2f}")
 
-elif page == "Search Term Opportunities":
-    st.title("Search Term Opportunities")
+    df_disp = df[["Keyword", "Match", "Bid", "Impressions", "Installs", "Spend", "CPI", "InstallRate"]].copy()
+    df_disp["Bid"] = df_disp["Bid"].apply(lambda x: f"${x:.2f}")
+    df_disp["Spend"] = df_disp["Spend"].apply(lambda x: f"${x:.0f}")
+    df_disp["CPI"] = df_disp["CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    df_disp["InstallRate"] = df_disp["InstallRate"].apply(lambda x: f"{x*100:.0f}%" if pd.notna(x) else "—")
+    df_disp = df_disp.sort_values("Installs", ascending=False)
+    st.dataframe(df_disp, use_container_width=True)
 
-    df_search_opportunities = st.session_state.df_search_opportunities
-    total_installs = df_search_opportunities['Installs'].sum()
+    if df["Installs"].sum() > 0:
+        st.subheader("CPI vs Installs")
+        fig = px.scatter(
+            df[df["Installs"] > 0],
+            x="CPI", y="Installs",
+            size="Spend", color="InstallRate",
+            hover_name="Keyword",
+            color_continuous_scale="RdYlGn",
+            title="Bubble size = spend | colour = install rate",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Search Terms Identified", len(df_search_opportunities))
-    with col2:
-        st.metric("Total Installs", f"{total_installs:,}")
-    with col3:
-        avg_cpi = df_search_opportunities['Spend'].sum() / total_installs if total_installs > 0 else 0
-        st.metric("Avg CPI", f"${avg_cpi:.2f}")
 
-    st.markdown("---")
+def page_search_terms(search_df):
+    st.title("Search Term Opportunities — P2")
+    st.caption("What people are actually searching when they see your ads (Feb 24 – Mar 17)")
 
-    df_display = df_search_opportunities.copy()
-    df_display['Spend'] = df_display['Spend'].apply(lambda x: f"${x:,.2f}")
-    df_display['CPI'] = df_display['CPI'].apply(lambda x: f"${x:.2f}")
-    df_display['InstallRate'] = df_display['InstallRate'].apply(lambda x: f"{x*100:.1f}%")
-    df_display['Suggested Bid'] = df_display['Suggested Bid'].apply(lambda x: f"${x:.2f}")
+    if search_df.empty:
+        st.error("Search term data not available.")
+        return
 
-    st.dataframe(df_display, use_container_width=True)
+    campaign = st.selectbox(
+        "Campaign:",
+        ["All"] + sorted(search_df["Campaign"].dropna().unique()),
+    )
+    df = search_df if campaign == "All" else search_df[search_df["Campaign"] == campaign]
+    df = df[df["Installs"] > 0].sort_values("Installs", ascending=False)
 
-elif page == "Negative Keywords":
-    st.title("Existing Negative Keywords")
+    if df.empty:
+        st.info("No search terms with installs found.")
+        return
 
-    negative_keywords_summary = {
-        'ProductReview Campaign': [
-            'judge.me (broad)', 'judge me (broad)', 'loox (various)', 'trustoo (various)',
-            'yotpo (various)', 'okendo (various)', 'rivo (various)', 'trustpilot (various)'
+    cols = [c for c in ["Campaign", "Search Term", "Keyword", "Match", "Impressions", "Installs", "Spend", "CPI", "InstallRate"] if c in df.columns]
+    d = df[cols].copy()
+    if "CPI" in d.columns:
+        d["CPI"] = d["CPI"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+    if "InstallRate" in d.columns:
+        d["InstallRate"] = d["InstallRate"].apply(lambda x: f"{x*100:.0f}%" if pd.notna(x) else "—")
+    if "Spend" in d.columns:
+        d["Spend"] = d["Spend"].apply(lambda x: f"${x:.0f}")
+    st.dataframe(d, use_container_width=True)
+
+
+def page_negative_keywords():
+    st.title("Negative Keywords")
+
+    neg_data = {
+        "ProductReview": [
+            "judge.me (broad)", "judge me (broad)", "loox", "trustoo", "yotpo",
+            "okendo", "rivo", "trustpilot",
         ],
-        'Review-variations Campaign': [
-            'judge (broad)', 'Google Reviews (broad + exact)', 'ali review (broad)',
-            'amazon review (broad)', 'etsy reviews (broad)', 'testimonials slider (exact)'
+        "Review-variations": [
+            "judge (broad)", "Google Reviews (broad + exact)", "ali review (broad)",
+            "amazon review (broad)", "etsy reviews (broad)", "testimonials slider (exact)",
         ],
-        'Features Campaign': [
-            'judge.me branded terms', 'competitor names', 'reviews (exact)'
-        ],
-        'Trust Campaign': [
-            'trustpilot (exact)', 'trust pilot (exact)', 'social media icons'
-        ]
+        "Features": ["judge.me branded terms", "competitor names", "reviews (exact)"],
+        "Trust": ["trustpilot", "trust pilot", "social media icons"],
     }
 
-    for campaign, keywords in negative_keywords_summary.items():
-        with st.expander(f"**{campaign}** ({len(keywords)} categories)"):
-            for kw in keywords:
+    for camp, kws in neg_data.items():
+        with st.expander(f"**{camp}** ({len(kws)} entries)"):
+            for kw in kws:
                 st.markdown(f"- {kw}")
 
-elif page == "Action Checklist":
+
+def page_action_checklist(comp, p2):
     st.title("Action Checklist")
+    st.caption("Priority actions based on P2 data")
 
-    st.subheader("IMMEDIATE ACTIONS (This Week)")
-
-    actions_immediate = [
-        ("PAUSE", "customer feedback (broad)", "Review-variations"),
-        ("PAUSE", "feedback app (broad)", "Review-variations"),
-        ("INCREASE BID", "okendo to $5.00", "Competitors"),
-        ("INCREASE BID", "yotpo reviews to $3.50", "Competitors"),
-        ("ADD KEYWORD", "testimonials (exact)", "Review-variations"),
-        ("ADD KEYWORD", "loox reviews (exact)", "Competitors"),
+    st.subheader("🔴 Immediate (This Week)")
+    immediate = [
+        ("PAUSE", "google reviews (exact)", "ProductReview", "CPI $9.11, confirmed 2 periods"),
+        ("PAUSE", "google review (exact)", "ProductReview", "CPI $8.61, confirmed 2 periods"),
+        ("PAUSE", "carousel (broad)", "Features", "CPI $19.50, 4 installs in 22 days"),
+        ("PAUSE", "q&a (broad)", "Features", "Zero installs both periods"),
+        ("PAUSE", "rich snippet (broad)", "Features", "Zero installs both periods"),
+        ("PAUSE", "question (broad)", "Trust", "Zero installs on 74 impressions"),
+        ("INCREASE BID $2.00→$2.50", "shopify product reviews", "ProductReview", "Best bid increase result (+195%)"),
+        ("INCREASE BID $4.00→$5.00", "review widget (broad)", "ProductReview", "111 installs/22 days, scaling well"),
+        ("INCREASE BID $5.00→$7.00", "stars (broad)", "Trust", "84% install rate, needs more impressions"),
     ]
-
-    for action, keyword, campaign in actions_immediate:
-        st.checkbox(f"**{action}:** `{keyword}` in {campaign}", key=f"imm_{keyword}")
+    for action, kw, camp, note in immediate:
+        st.checkbox(f"**{action}** `{kw}` ({camp}) — {note}", key=f"imm_{kw}")
 
     st.markdown("---")
-
-    st.subheader("SHORT-TERM ACTIONS (Next 2 Weeks)")
-
-    actions_short = [
-        "Add all HIGH priority new keywords (10 keywords)",
-        "Reduce bid on google reviews/review to $3.50",
-        "Add competitor keywords: stamped.io, fera reviews",
+    st.subheader("🟡 Short-Term (Next 2 Weeks)")
+    short = [
+        "Raise all $1.00-bid Competitors keywords to $2.50 minimum or pause them",
+        "Increase loox reviews (exact) bid $3.50→$4.50 — showing early traction",
+        "Add review (exact) bid increase: $2.00→$2.50 (test — already +21% from last increase)",
+        "Investigate why loox review / customer reviews / rivo reviews declined after bid increase",
+        "Download Review-variations campaign data for P2 (missing from current dataset)",
     ]
+    for a in short:
+        st.checkbox(a, key=f"short_{a[:30]}")
 
-    for action in actions_short:
-        st.checkbox(action, key=f"short_{action[:20]}")
+    st.markdown("---")
+    st.subheader("🟢 Ongoing Monitoring")
+    st.markdown("""
+- Review Trust campaign weekly — `stars` and `comments` are new and early-stage
+- Check if `aliexpress reviews` (exact, $4.00) scales beyond 5 installs
+- In 4 weeks re-evaluate `review importer` and `reviews importer` — both showing improving daily rates
+""")
 
 
-# Footer
+# ============================================================================
+# MAIN
+# ============================================================================
+
+if not check_auth():
+    st.stop()
+
+# Load data
+p1 = load_keywords(P1_FILES)
+p2 = load_keywords(P2_FILES)
+search_p2 = load_search_terms(P2_SEARCH_FILES)
+comp = build_comparison(p1, p2)
+
+# Sidebar
+st.sidebar.title("⭐ Judge.me Ads")
+st.sidebar.markdown(f"**P1:** Aug 21 – Feb 18, 2026 (181 days)")
+st.sidebar.markdown(f"**P2:** Feb 24 – Mar 17, 2026 (22 days)")
+st.sidebar.markdown("---")
+
+page = st.sidebar.radio(
+    "Navigate:",
+    [
+        "📊 Before vs After",
+        "🆕 New Keywords Status",
+        "💸 Bid Change Impact",
+        "📋 Keyword Analysis",
+        "🔍 Search Terms (P2)",
+        "💡 Recommendations",
+        "🚫 Negative Keywords",
+        "✅ Action Checklist",
+    ],
+)
+
+st.sidebar.markdown("---")
+if not p1.empty:
+    st.sidebar.caption(f"P1 keywords loaded: {len(p1)}")
+if not p2.empty:
+    st.sidebar.caption(f"P2 keywords loaded: {len(p2)}")
+if not search_p2.empty:
+    st.sidebar.caption(f"P2 search terms loaded: {len(search_p2)}")
+
+# Route
+if page == "📊 Before vs After":
+    page_before_after(p1, p2, comp)
+elif page == "🆕 New Keywords Status":
+    page_new_keywords(p1, p2, comp)
+elif page == "💸 Bid Change Impact":
+    page_bid_impact(comp)
+elif page == "📋 Keyword Analysis":
+    page_keyword_analysis(p2)
+elif page == "🔍 Search Terms (P2)":
+    page_search_terms(search_p2)
+elif page == "💡 Recommendations":
+    page_recommendations(p1, p2, comp, search_p2)
+elif page == "🚫 Negative Keywords":
+    page_negative_keywords()
+elif page == "✅ Action Checklist":
+    page_action_checklist(comp, p2)
+
 st.markdown("---")
-st.caption("Judge.me Shopify Ads Analysis Dashboard | Focus: Keyword Discovery for Install Growth")
+st.caption("Judge.me Ads Dashboard v2 · P1: Aug 21–Feb 18, 2026 · P2: Feb 24–Mar 17, 2026")

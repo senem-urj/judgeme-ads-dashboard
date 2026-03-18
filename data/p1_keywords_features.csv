@@ -1,0 +1,21 @@
+App Name,Ad Name,Start Date,End Date,Time Zone,Currency,Keyword,Match Type,Status,Bid,Impressions,Clicks,Click Through Rate,Installs,Install Rate,Cost Per Click,Cost Per Install,Spend,Average Position,Visibility,Customers,Revenue,Return On Spend,Cost Per Customer,Conversion Rate
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,amazon reviews importer,broad,active,5.0,23541,1877,0.079733,1356,0.722429,5.0,6.921091,9385.0,2.620279,0.269681,31,1176.72,0.125383,302.741935,0.022861
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,etsy importer,broad,active,5.0,9028,412,0.045635,268,0.650485,5.0,7.686567,2060.0,2.664488,0.189004,8,286.81,0.139228,257.5,0.02985
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,carousel,broad,active,6.0,4786,116,0.024237,41,0.353448,6.0,16.975609,696.0,2.185959,0.594091,1,15.22,0.021867,696.0,0.02439
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,ugc,broad,active,7.0,2676,81,0.030269,31,0.382716,7.0,18.290322,567.0,2.483557,0.482596,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,amazon reviews,exact,active,3.0,1655,148,0.089425,93,0.628378,3.0,4.774193,444.0,1.447734,0.848282,1,15.0,0.033783,444.0,0.010752
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,review importer,exact,active,3.6,1430,192,0.134265,147,0.765625,3.6,4.70204,691.2,1.6993,0.935251,1,30.0,0.043402,691.2,0.006802
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,reviews importer,exact,active,3.2,1409,239,0.169623,176,0.736401,3.199999,4.345454,764.8,1.465578,0.947545,4,105.44,0.137866,191.2,0.022727
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,rich snippet,broad,active,5.0,605,12,0.019834,7,0.583333,5.0,8.571428,60.0,1.88595,0.539696,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,q&a,broad,active,6.0,506,12,0.023715,4,0.333333,6.0,18.0,72.0,1.731225,0.611111,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,coupons,broad,active,2.0,389,6,0.015424,2,0.333333,2.0,6.0,12.0,3.634961,0.08683,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,referrals,broad,active,4.0,308,1,0.003246,0,0.0,4.0,0.0,4.0,3.876623,0.047796,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,question,broad,active,5.0,120,4,0.033333,1,0.25,5.0,20.0,20.0,1.425,0.95238,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,ucg,broad,active,4.0,49,1,0.020408,1,1.0,4.0,4.0,4.0,1.224489,0.563218,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,google reviews,exact,active,4.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,etsy reviews importer,broad,active,1.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,amazon importer,broad,paused,5.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,import etsy,broad,active,1.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,import amazon,broad,active,1.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,coupon,broad,active,2.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
+Judge.me Product Reviews App,Search_EN_Features_2024.08.19,2025-08-21,2026-02-18,UTC,USD,referral,broad,active,4.0,0,0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,,,,,
