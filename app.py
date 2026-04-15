@@ -1,14 +1,15 @@
 """
-Judge.me Shopify App Store Ads Dashboard v3
+Judge.me Shopify App Store Ads Dashboard v4
 Generic paid ads performance dashboard with trend analysis,
-audience splits, keyword intelligence, and diagnosis.
+audience splits, keyword intelligence, change log, and diagnosis.
 
 Data coverage:
   Full Year: Apr 7, 2025 – Apr 7, 2026 (campaign aggregate)
-  P1: Aug 21, 2025 – Feb 18, 2026 (181 days, daily + keyword detail)
+  Daily: Aug 21, 2025 – Apr 15, 2026 (keyword + bid detail)
   P2: Feb 24, 2026 – Mar 17, 2026 (22 days, keyword detail)
+  P3: Jan 16, 2026 – Apr 15, 2026 (aggregate incl. language campaigns)
   Q1 2026: Jan 8, 2026 – Apr 7, 2026 (90 days, search term detail)
-  Change date: Feb 24, 2026 (keyword/bid changes made)
+  Change Log: Feb 24, 2026 + Mar 18–Apr 15, 2026 (159 events)
 """
 
 import streamlit as st
@@ -183,6 +184,16 @@ def load_search_terms():
     for c in ["Impressions","Clicks","Installs","Spend","Customers","Revenue"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    return df
+
+@st.cache_data
+def load_changelog():
+    p = DATA_DIR / "keyword_changelog.csv"
+    if not p.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(p)
+    if "P2 Installs" in df.columns:
+        df["P2 Installs"] = pd.to_numeric(df["P2 Installs"], errors="coerce").fillna(0).astype(int)
     return df
 
 def build_kw_comparison(p1, p2):
@@ -379,7 +390,7 @@ def page_overview(daily, yr_camps, p2_camps):
 
 def page_trends(daily, p2_camps):
     st.title("📅 Trends & Timeline")
-    st.caption("Daily install trend Aug 21, 2025 – Feb 18, 2026, with P2 average reference. Red line = Feb 24 change date.")
+    st.caption("Daily install trend Aug 21, 2025 – Apr 15, 2026. Red lines = change dates (Feb 24, Mar 18). Note: last week is partial (Apr 13–15 only).")
 
     if daily.empty:
         st.error("Daily data not available.")
@@ -956,6 +967,150 @@ Now paused. Worth reactivating if Portuguese-speaking markets are a growth targe
         st.checkbox(f"**{action}** `{kw}` — {note}", key=f"chk_{kw[:40]}")
 
 
+def page_changelog(changelog, daily):
+    st.title("📋 Change Log")
+    st.caption(
+        "All keyword and bid changes across Feb 24 and Mar 18–Apr 15, 2026. "
+        "159 events reconstructed from 3 keyword snapshots (Feb 18, Mar 17, Apr 15)."
+    )
+
+    if changelog.empty:
+        st.error("Change log data not available.")
+        return
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    n_bid  = len(changelog[changelog["Change Type"] == "Bid Change"])
+    n_add  = len(changelog[changelog["Change Type"] == "Keyword Added"])
+    n_drop = len(changelog[changelog["Change Type"] == "Keyword Dropped"])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Events",     len(changelog))
+    c2.metric("Bid Changes",      n_bid)
+    c3.metric("Keywords Added",   n_add)
+    c4.metric("Keywords Dropped", n_drop)
+
+    # ── Weekly install trend with change events annotated ─────────────────────
+    st.markdown("---")
+    st.subheader("Weekly Install Trend — Change Events Annotated")
+
+    if not daily.empty:
+        dc = daily.copy()
+        dc["Week"] = dc["Date"].dt.to_period("W").dt.start_time
+        wk = dc.groupby("Week").agg(Installs=("Installs","sum")).reset_index().sort_values("Week")
+
+        # Drop last partial week if it looks truncated
+        if len(wk) > 1:
+            prev_avg = wk.iloc[-8:-1]["Installs"].mean() if len(wk) >= 8 else wk.iloc[:-1]["Installs"].mean()
+            if wk.iloc[-1]["Installs"] < prev_avg * 0.5:
+                wk = wk.iloc[:-1]
+
+        fig = go.Figure()
+        fig.add_scatter(
+            x=wk["Week"], y=wk["Installs"],
+            mode="lines+markers", name="Weekly Installs",
+            line=dict(color="#4C78A8", width=2.5), marker=dict(size=7),
+        )
+        fig.add_vline(x="2026-02-23", line_width=2, line_dash="dash", line_color="#E45756",
+                      annotation_text="Feb 24: 12 bid raises + 121 new keywords",
+                      annotation_position="top right", annotation_font_color="#E45756")
+        fig.add_vline(x="2026-03-16", line_width=2, line_dash="dash", line_color="#F58518",
+                      annotation_text="Mar 18+: 7 bid changes + 12 added, 7 dropped",
+                      annotation_position="top left", annotation_font_color="#F58518")
+        fig.update_layout(height=400, yaxis_title="Weekly Installs", hovermode="x unified",
+                          title="Installs peaked at 786/week (Feb 23). Trended down every week after changes.")
+        st.plotly_chart(fig, use_container_width=True)
+
+        wk_recent = wk[wk["Week"] >= pd.Timestamp("2026-02-16")].copy()
+        if len(wk_recent) >= 2:
+            peak = wk_recent["Installs"].max()
+            wk_recent["vs Peak"] = ((wk_recent["Installs"] / peak - 1) * 100).round(1).astype(str) + "%"
+            wk_recent["Week"] = wk_recent["Week"].dt.strftime("%b %d")
+            st.dataframe(wk_recent[["Week","Installs","vs Peak"]].rename(columns={"vs Peak":"vs Feb 23 Peak"}),
+                         use_container_width=False, hide_index=True)
+
+    # ── Per-period tabs ───────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Changes by Period")
+
+    feb24 = changelog[changelog["Date"] == "~Feb 24, 2026"].copy()
+    mar18 = changelog[changelog["Date"] == "Mar 18 – Apr 15, 2026"].copy()
+
+    tab1, tab2 = st.tabs([
+        f"Feb 24 Changes ({len(feb24)} events)",
+        f"Mar 18–Apr 15 Changes ({len(mar18)} events)",
+    ])
+
+    with tab1:
+        bid1 = feb24[feb24["Change Type"] == "Bid Change"]
+        add1 = feb24[feb24["Change Type"] == "Keyword Added"]
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**{len(bid1)} Bid Changes**")
+            if not bid1.empty:
+                st.dataframe(bid1[["Campaign","Keyword","Match Type","From","To","Direction","P2 Installs"]],
+                             use_container_width=True, hide_index=True)
+                raised = bid1[bid1["Direction"] == "▲ Raised"]
+                good = raised[raised["P2 Installs"] >= 20]
+                bad  = raised[raised["P2 Installs"] < 5]
+                st.info(f"Of {len(raised)} raises: **{len(good)} drove ≥20 installs** in P2, **{len(bad)} got <5 installs** despite higher bid.")
+        with c2:
+            st.markdown(f"**{len(add1)} Keywords Added**")
+            if not add1.empty:
+                st.dataframe(add1[["Campaign","Keyword","Match Type","P2 Installs"]].sort_values("P2 Installs", ascending=False),
+                             use_container_width=True, hide_index=True)
+
+    with tab2:
+        bid2  = mar18[mar18["Change Type"] == "Bid Change"]
+        add2  = mar18[mar18["Change Type"] == "Keyword Added"]
+        drop2 = mar18[mar18["Change Type"] == "Keyword Dropped"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Bid Changes",      len(bid2))
+        c2.metric("Keywords Added",   len(add2))
+        c3.metric("Keywords Dropped", len(drop2))
+        if not bid2.empty:
+            st.markdown("**Bid Changes:**")
+            st.dataframe(bid2[["Campaign","Keyword","Match Type","From","To","Direction","P2 Installs"]],
+                         use_container_width=True, hide_index=True)
+        if not drop2.empty:
+            st.markdown("**Keywords Dropped:**")
+            st.dataframe(drop2[["Campaign","Keyword","Match Type"]], use_container_width=True, hide_index=True)
+        if not add2.empty:
+            st.markdown(f"**{len(add2)} Keywords Added:**")
+            st.dataframe(add2[["Campaign","Keyword","Match Type","P2 Installs"]].sort_values("P2 Installs", ascending=False),
+                         use_container_width=True, hide_index=True)
+
+    # ── Full filterable table ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Full Change Log — All 159 Events")
+    c1, c2 = st.columns(2)
+    type_sel = c1.multiselect("Change Type:", sorted(changelog["Change Type"].unique()),
+                               default=sorted(changelog["Change Type"].unique()))
+    camp_sel = c2.multiselect("Campaign:", sorted(changelog["Campaign"].dropna().unique()),
+                               default=sorted(changelog["Campaign"].dropna().unique()))
+    view = changelog[changelog["Change Type"].isin(type_sel) & changelog["Campaign"].isin(camp_sel)]
+    st.dataframe(view[["Date","Change Type","Campaign","Keyword","Match Type","From","To","Direction","P2 Installs"]],
+                 use_container_width=True, hide_index=True)
+
+    # ── Impact summary ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Impact Assessment")
+    st.markdown("""
+**Feb 24 bid increases — mixed results:**
+- Worked well (≥20 installs in P2): `review` (468), `shopify product reviews` (121), `reviews importer` (39), `reviews app` (35)
+- Didn't help despite higher bid: `customer reviews` (4), `rivo reviews` (0), `loox - photo reviews` (0)
+- Higher bids helped head terms; had little effect on niche competitor keywords
+
+**Mar 18–Apr 15 adjustments:**
+- `review widget` raised to $5.00 → 282 installs (strong)
+- `review` raised again to $2.50 → 1,836 installs (top volume keyword)
+- `google reviews` lowered $5.00→$4.00 (correct — $9.11 CPI)
+- 7 Competitors keywords dropped (zero/low performers)
+
+**Net result:** Weekly installs declined every week after Feb 24 — from **786/week** at peak to **~600/week** by early April (-24%).
+Changes addressed expensive individual keywords but didn't reverse the macro decline. See **Diagnosis & Fix** for root causes.
+""")
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -964,24 +1119,25 @@ if not check_auth():
     st.stop()
 
 # Load all data
-daily       = load_daily()
-yr_camps    = load_year_campaigns()
-p2_camps    = load_p2_campaigns()
-p1_kw       = load_keywords("p1")
-p2_kw       = load_keywords("p2")
-kw_comp     = build_kw_comparison(p1_kw, p2_kw)
-country_df  = load_splits("q1_splits_country.csv")
-device_df   = load_splits("q1_splits_device.csv")
-plan_df     = load_splits("q1_splits_plan.csv")
-search_df   = load_search_terms()
+daily        = load_daily()
+yr_camps     = load_year_campaigns()
+p2_camps     = load_p2_campaigns()
+p1_kw        = load_keywords("p1")
+p2_kw        = load_keywords("p2")
+kw_comp      = build_kw_comparison(p1_kw, p2_kw)
+country_df   = load_splits("q1_splits_country.csv")
+device_df    = load_splits("q1_splits_device.csv")
+plan_df      = load_splits("q1_splits_plan.csv")
+search_df    = load_search_terms()
+changelog_df = load_changelog()
 
 # Sidebar
 st.sidebar.title("⭐ Judge.me Ads")
-st.sidebar.caption("Apr 7, 2025 – Apr 7, 2026")
-st.sidebar.markdown("**Daily detail:** Aug 21–Feb 18")
+st.sidebar.caption("Full Year: Apr 7, 2025 – Apr 7, 2026")
+st.sidebar.markdown("**Daily detail:** Aug 21–Apr 15")
 st.sidebar.markdown("**P2 snapshot:** Feb 24–Mar 17")
 st.sidebar.markdown("**Splits:** Jan 8–Apr 7 (90d)")
-st.sidebar.markdown("⚡ **Changes:** Feb 24, 2026")
+st.sidebar.markdown("⚡ **Changes:** Feb 24 + Mar 18–Apr 15")
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio("Navigate:", [
@@ -992,6 +1148,7 @@ page = st.sidebar.radio("Navigate:", [
     "🌍 Audience Splits",
     "🔍 Search Terms",
     "💡 Diagnosis & Fix",
+    "📋 Change Log",
 ])
 
 st.sidebar.markdown("---")
@@ -1001,6 +1158,8 @@ if not yr_camps.empty:
     st.sidebar.caption(f"Year campaigns: {len(yr_camps)}")
 if not search_df.empty:
     st.sidebar.caption(f"Search terms: {len(search_df):,}")
+if not changelog_df.empty:
+    st.sidebar.caption(f"Change events: {len(changelog_df)}")
 
 # Route
 if page == "📈 Overview":
@@ -1017,6 +1176,8 @@ elif page == "🔍 Search Terms":
     page_search_terms(search_df, p2_kw)
 elif page == "💡 Diagnosis & Fix":
     page_diagnosis(daily, yr_camps, p2_camps, p1_kw, p2_kw, country_df)
+elif page == "📋 Change Log":
+    page_changelog(changelog_df, daily)
 
 st.markdown("---")
 st.caption("Judge.me Ads Dashboard v3 · Apr 7 2025–Apr 7 2026 · Built with Streamlit")
