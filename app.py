@@ -1010,12 +1010,12 @@ def page_changelog(changelog, daily):
             mode="lines+markers", name="Weekly Installs",
             line=dict(color="#4C78A8", width=2.5), marker=dict(size=7),
         )
-        fig.add_vline(x="2026-02-23", line_width=2, line_dash="dash", line_color="#E45756",
-                      annotation_text="Feb 24: 12 bid raises + 121 new keywords",
-                      annotation_position="top right", annotation_font_color="#E45756")
-        fig.add_vline(x="2026-03-16", line_width=2, line_dash="dash", line_color="#F58518",
-                      annotation_text="Mar 18+: 7 bid changes + 12 added, 7 dropped",
-                      annotation_position="top left", annotation_font_color="#F58518")
+        fig.add_vline(x="2026-02-23", line_width=2, line_dash="dash", line_color="#E45756")
+        fig.add_annotation(x="2026-02-23", y=1, yref="paper", text="Feb 24: bid raises + new keywords",
+                           showarrow=False, xanchor="left", font=dict(color="#E45756", size=11))
+        fig.add_vline(x="2026-03-16", line_width=2, line_dash="dash", line_color="#F58518")
+        fig.add_annotation(x="2026-03-16", y=0.92, yref="paper", text="Mar 18+: bid changes + dropped kws",
+                           showarrow=False, xanchor="right", font=dict(color="#F58518", size=11))
         fig.update_layout(height=400, yaxis_title="Weekly Installs", hovermode="x unified",
                           title="Installs peaked at 786/week (Feb 23). Trended down every week after changes.")
         st.plotly_chart(fig, use_container_width=True)
