@@ -432,9 +432,9 @@ def page_trends(daily, p2_camps):
                            text=f"P2 avg: {p2_avg:.0f}", showarrow=False,
                            font=dict(color="#82b366", size=11))
 
-    fig.add_vline(x="2026-02-24", line_width=2, line_dash="dash", line_color="#E45756",
-                  annotation_text="⚡ Keyword/Bid Changes", annotation_position="top right",
-                  annotation_font_color="#E45756")
+    fig.add_vline(x="2026-02-24", line_width=2, line_dash="dash", line_color="#E45756")
+    fig.add_annotation(x="2026-02-24", y=1, yref="paper", text="⚡ Keyword/Bid Changes",
+                       showarrow=False, xanchor="left", font=dict(color="#E45756", size=11))
     fig.update_layout(height=420, yaxis_title=metric, hovermode="x unified",
                       legend=dict(orientation="h"))
     st.plotly_chart(fig, use_container_width=True)
