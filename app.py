@@ -826,142 +826,138 @@ def page_search_terms(search_df, p2_kw):
 
 def page_diagnosis(daily, yr_camps, p2_camps, p1_kw, p2_kw, country_df):
     st.title("💡 Diagnosis & Recommendations")
-    st.caption("What went wrong, why, and exactly what to change.")
+    st.caption("Goal: maximize install volume. Only cut keywords with proven zero installs — keep everything that drives volume.")
 
-    # ── What happened ─────────────────────────────────────────────────────────
-    st.subheader("🔎 The Real Problem")
+    # ── Install trend ─────────────────────────────────────────────────────────
+    st.subheader("🔎 What Happened to Installs")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("#### Install volume: fine ✅")
-        if not daily.empty and not p2_camps.empty:
-            p1_ipd = daily["Installs"].sum() / 181
+    if not daily.empty:
+        dc = daily.copy()
+        dc["Week"] = dc["Date"].dt.to_period("W").dt.start_time
+        wk = dc.groupby("Week").agg(Installs=("Installs","sum")).reset_index().sort_values("Week")
+        if len(wk) > 1 and wk.iloc[-1]["Installs"] < wk.iloc[-2]["Installs"] * 0.5:
+            wk = wk.iloc[:-1]
+        peak_wk   = wk.loc[wk["Installs"].idxmax()]
+        latest_wk = wk.iloc[-1]
+        pct_drop  = (latest_wk["Installs"] / peak_wk["Installs"] - 1) * 100
+
+        c1, c2, c3, c4 = st.columns(4)
+        p1_ipd = daily["Installs"].sum() / 181
+        c1.metric("P1 Avg Installs/Day", f"{p1_ipd:.0f}")
+        if not p2_camps.empty:
             p2_ipd = p2_camps["Installs"].sum() / 22
-            st.metric("P1 Installs/Day", f"{p1_ipd:.0f}")
-            st.metric("P2 Installs/Day", f"{p2_ipd:.0f}", delta=f"{p2_ipd-p1_ipd:+.0f}")
-        st.success("Reach is working. The bid/keyword changes didn't break volume.")
-    with col2:
-        st.markdown("#### Revenue per install: collapsing ❌")
-        if not daily.empty and not p2_camps.empty:
-            p1_roas = daily["Revenue"].sum() / daily["Spend"].sum() * 100
-            p1_conv = daily["Customers"].sum() / daily["Installs"].sum() * 100
-            p2_roas = p2_camps["Revenue"].sum() / p2_camps["Spend"].sum() * 100 if p2_camps["Spend"].sum()>0 else 0
-            p2_conv = p2_camps["Customers"].sum() / p2_camps["Installs"].sum() * 100 if p2_camps["Installs"].sum()>0 else 0
-            st.metric("P1 ROAS",         f"{p1_roas:.0f}%")
-            st.metric("P2 ROAS",         f"{p2_roas:.1f}%", delta=f"{p2_roas-p1_roas:.0f}pp", delta_color="normal")
-            st.metric("P1 Conv%",        f"{p1_conv:.1f}%")
-            st.metric("P2 Conv%",        f"{p2_conv:.1f}%", delta=f"{p2_conv-p1_conv:.1f}pp")
-        st.error("Each install is generating far less revenue. Traffic quality has dropped.")
+            c2.metric("P2 Avg Installs/Day", f"{p2_ipd:.0f}", delta=f"{p2_ipd-p1_ipd:+.0f}")
+        c3.metric("Peak Weekly Installs", f"{int(peak_wk['Installs'])} (Feb 23)")
+        c4.metric("Latest Full Week",     f"{int(latest_wk['Installs'])} ({pct_drop:+.0f}% vs peak)")
 
     st.markdown("---")
-    st.subheader("🔬 Root Causes")
+    st.subheader("🔬 Why Installs Are Declining")
     st.markdown("""
-**1. Geographic traffic mix — volume without quality**
-India + Pakistan drive ~30% of installs at low CPI ($1–2) but convert to paying customers at a fraction of US/UK/AU rates.
-The keyword/bid changes likely increased reach into these markets further.
+**1. Install volume peaked Feb 23 then declined every week after the changes**
+The Feb 24 bid raises and keyword additions didn't grow volume — installs fell steadily from
+786/week at peak to ~600/week by early April (-24%). The changes weren't the cause of the decline
+(it started earlier) but they also didn't reverse it.
 
-**2. Broad-match keywords attract non-commercial intent**
-`carousel`, `q&a`, `rich snippet`, `question`, `google reviews` — these catch people who aren't looking for a Shopify reviews app.
-They burn budget and inflate install numbers without improving the paying customer pipeline.
+**2. BrandProtection and PLUS-ProductReview are massively underinvested**
+These two campaigns have the best performance in the account but are capped at $20/day and $10/day respectively.
+Raising their budgets is the single fastest way to get more installs with proven conversion.
+- **BrandProtection:** $0.28 CPI, 145 paying customers from $849 spend over 12 months
+- **PLUS-ProductReview:** targets Shopify Plus merchants, 313% ROAS, currently paused
 
-**3. Bid increases disrupted auction efficiency on some keywords**
-Several keywords that were profitable at lower bids showed declining volume after being raised
-(loox review, rivo reviews, customer reviews). Higher bids can sometimes shift audience targeting to less relevant segments.
+**3. Dormant competitor keywords are wasting bid headroom**
+Many Competitors campaign keywords were added at $1.00 bid — they get zero impressions because
+$1 cannot win any Shopify App Store auction. These slots should either be raised to $2.50+ or cut,
+so that budget flows to keywords that are actually competing.
 
-**4. BrandProtection and PLUS-ProductReview are massively underinvested**
-- **BrandProtection:** $0.28 CPI, 14× ROAS over 12 months — capped at $20/day
-- **PLUS-ProductReview:** 3× ROAS (313%), targeting Shopify Plus merchants — capped at $10/day (now paused)
-Both of these should be scaled immediately.
+**4. `review` and `shopify product reviews` can scale further**
+These are the top two install-volume keywords in the account (1,836 and 385 installs in the last period).
+Both responded well to bid increases. There is likely more headroom to push volume higher.
 
-**5. Revenue attribution lag (partial cause)**
-The 30-day revenue attribution window means P2 and recent months appear worse than they are.
-But the ROAS decline started well before P2 (visible in the monthly trend), so this explains only part of it.
+**5. Revenue attribution lag makes ROAS look worse than it is**
+The 30-day attribution window means recent installs won't show revenue for another 2–4 weeks.
+Focus on install volume as the leading indicator, not ROAS, until attribution catches up.
 """)
 
     st.markdown("---")
-    st.subheader("🔴 Pause These Now")
+    st.subheader("🔴 Pause These — Zero Installs, Pure Dead Weight")
+    st.caption("These keywords have spent budget across multiple periods and produced zero or near-zero installs. Pausing frees ~$8/day to add to top performers.")
     pause = [
-        {"Action":"PAUSE","Keyword":"google reviews (exact)","Campaign":"ProductReview","P2 CPI":"$9.11","Saves/Day":"~$19","Reason":"3× account avg CPI, confirmed across 2 periods"},
-        {"Action":"PAUSE","Keyword":"google review (exact)","Campaign":"ProductReview","P2 CPI":"$8.61","Saves/Day":"~$7","Reason":"Same issue as above"},
-        {"Action":"PAUSE","Keyword":"carousel (broad)","Campaign":"Features","P2 CPI":"$19.50","Saves/Day":"~$4","Reason":"Highest CPI in account, 4 installs in 22 days"},
-        {"Action":"PAUSE","Keyword":"q&a (broad)","Campaign":"Features","P2 CPI":"—","Saves/Day":"~$1","Reason":"0 installs, confirmed both periods"},
-        {"Action":"PAUSE","Keyword":"rich snippet (broad)","Campaign":"Features","P2 CPI":"—","Saves/Day":"<$1","Reason":"0 installs both periods"},
-        {"Action":"PAUSE","Keyword":"question (broad)","Campaign":"Trust","P2 CPI":"—","Saves/Day":"<$1","Reason":"0 installs on 74 impressions"},
+        {"Keyword":"q&a (broad)","Campaign":"Features","3M Installs":1,"3M Spend":"~$30","Reason":"1 install from $30 spend. Not a Shopify app search intent."},
+        {"Keyword":"rich snippet (broad)","Campaign":"Features","3M Installs":1,"3M Spend":"~$20","Reason":"1 install from $20 spend. SEO concept, not app intent."},
+        {"Keyword":"question (broad)","Campaign":"Trust","3M Installs":2,"3M Spend":"~$70","Reason":"2 installs from $70 across 2 campaigns."},
+        {"Keyword":"loox - photo reviews (exact)","Campaign":"Competitors","3M Installs":0,"3M Spend":"~$10","Reason":"0 installs confirmed across P1, P2, P3."},
+        {"Keyword":"rivo reviews (exact)","Campaign":"Competitors","3M Installs":0,"3M Spend":"~$10","Reason":"0 installs confirmed across P1, P2, P3."},
+        {"Keyword":"All $1.00-bid Competitor keywords","Campaign":"Competitors","3M Installs":0,"3M Spend":"—","Reason":"$1 bid cannot win any auction on Shopify App Store. Zero impressions."},
     ]
     st.dataframe(pd.DataFrame(pause), use_container_width=True)
-    st.error("💸 Pausing these 6 keywords frees ~**$32/day** to reallocate.")
+    st.warning("Note: `google reviews` (171 installs) and `google review` (102 installs) are NOT on this list — they drive real volume and should stay.")
 
     st.markdown("---")
-    st.subheader("🟢 Scale These Immediately")
+    st.subheader("🟢 Scale These for More Installs")
     scale = [
-        {"Action":"INCREASE BUDGET $20→$150/day","Campaign":"BrandProtection","12M ROAS":"1,436%","Why":"$0.28 CPI, 145 customers, $12k revenue on $849 spend. The best-performing campaign. Criminal to cap at $20/day."},
-        {"Action":"REACTIVATE + budget $10→$50/day","Campaign":"PLUS-ProductReview","12M ROAS":"313%","Why":"Targets Shopify Plus merchants who pay more. 33 customers, $3k revenue on $967 spend. Currently paused."},
-        {"Action":"INCREASE BID $2.00→$2.50","Keyword":"shopify product reviews (exact)","Campaign":"ProductReview","12M ROAS":"—","Why":"+195% installs after last bid increase. CPI still $2.24."},
-        {"Action":"INCREASE BID $4.00→$5.00","Keyword":"review widget (broad)","Campaign":"ProductReview","12M ROAS":"—","Why":"111 installs in 22 days. New keyword showing clear scaling potential."},
-        {"Action":"INCREASE BID $5.00→$7.00","Keyword":"stars (broad)","Campaign":"Trust","12M ROAS":"—","Why":"84% install rate. Only 264 impressions — much more headroom available."},
+        {"Priority":"#1","Action":"Budget $20→$150/day","Campaign":"BrandProtection","Evidence":"$0.28 CPI, 145 customers from $849 spend (12 months). Most efficient campaign in the account. Budget is the only constraint."},
+        {"Priority":"#2","Action":"Reactivate + budget $10→$75/day","Campaign":"PLUS-ProductReview","Evidence":"313% ROAS, targets Shopify Plus merchants. Currently paused. 33 customers from $967 spend."},
+        {"Priority":"#3","Action":"Increase bid $2.50→$3.50","Keyword":"review (exact)","Campaign":"ProductReview","Evidence":"1,836 installs in last period — top volume keyword in account. Likely hitting budget cap. More bid = more impressions."},
+        {"Priority":"#4","Action":"Increase bid $3.50→$4.50","Keyword":"shopify product reviews (exact)","Campaign":"ProductReview","Evidence":"385 installs last period, +195% after last raise. Still scaling well."},
+        {"Priority":"#5","Action":"Increase bid $5.00→$6.50","Keyword":"review widget (broad)","Campaign":"ProductReview","Evidence":"282 installs last period. Broad match with strong install rate — bid up to capture more volume."},
+        {"Priority":"#6","Action":"Increase bid $7.00→$9.00","Keyword":"stars (broad)","Campaign":"Trust","Evidence":"81 installs last period. 84% install rate. More headroom available at higher bid."},
+        {"Priority":"#7","Action":"Raise bid $1.00→$2.50+ or pause","Keyword":"All dormant Competitor keywords","Campaign":"Competitors","Evidence":"$1 bid = 0 impressions. Either compete properly or free that budget for active keywords."},
     ]
     st.dataframe(pd.DataFrame(scale), use_container_width=True)
 
     st.markdown("---")
-    st.subheader("🟡 Strategic Actions — Next 2 Weeks")
-    st.markdown("""
-**Geographic targeting:**
-Check if India/Pakistan installs are converting to paid plans at an acceptable rate (use the Audience Splits page).
-If conversion is <1%, consider reducing bids by 40–50% for IN/PK, or test excluding them from your top keywords.
-UK, AU, CA install at similar or lower volume but convert to paying customers far more reliably.
-
-**Fix dormant competitor keywords:**
-Many new competitor keywords were added at $1.00 bid in P2 — these have zero impressions.
-At $1 you can't win any Shopify App Store auctions. Either raise to $2.50+ or pause them entirely.
-
-**Tighten broad match:**
-Review the Search Terms page for off-topic searches driving spend with no conversions.
-Add exact-match negatives for consistently bad terms like `free`, `template`, `google`, `amazon`.
-
-**Check the product funnel:**
-The ROAS decline started months before the keyword changes. Check if there was a pricing, onboarding,
-or app page change around Nov–Dec 2025 that reduced install→subscribe conversion.
-Ads can only send qualified traffic — if the funnel is leaking, ads won't fix it.
-
-**Review PT-Generic (Portuguese):**
-519 installs, 13 customers, $1,342 revenue on $2,599 spend — 51% ROAS over 12 months.
-Now paused. Worth reactivating if Portuguese-speaking markets are a growth target.
-""")
+    st.subheader("🆕 New Keywords to Add for More Volume")
+    st.markdown("These are high-intent searches that can bring incremental installs. Add as exact match first, then test broad.")
+    new_kws = [
+        {"Keyword":"shopify reviews app","Match":"exact","Suggested Bid":"$2.50","Campaign":"ProductReview","Rationale":"Direct competitor to top existing keywords, high commercial intent"},
+        {"Keyword":"product review app","Match":"exact","Suggested Bid":"$2.50","Campaign":"ProductReview","Rationale":"Generic reviews app intent — broad install potential"},
+        {"Keyword":"review app shopify","Match":"exact","Suggested Bid":"$2.00","Campaign":"ProductReview","Rationale":"Same intent as top performer, different word order"},
+        {"Keyword":"photo reviews","Match":"exact","Suggested Bid":"$2.00","Campaign":"ProductReview","Rationale":"Visual review intent — Judge.me supports this, competitor to Loox"},
+        {"Keyword":"star rating app","Match":"exact","Suggested Bid":"$2.00","Campaign":"Trust","Rationale":"Trust/rating intent, complements existing 'stars' broad keyword"},
+        {"Keyword":"review request app","Match":"exact","Suggested Bid":"$2.00","Campaign":"ProductReview","Rationale":"Post-purchase review automation intent — Judge.me core feature"},
+        {"Keyword":"stamped reviews","Match":"exact","Suggested Bid":"$2.50","Campaign":"Competitors","Rationale":"Direct Stamped.io competitor — same audience as Loox/Yotpo targeting"},
+        {"Keyword":"ali reviews","Match":"exact","Suggested Bid":"$2.00","Campaign":"Competitors","Rationale":"Popular reviews importer app, merchants switching often search this"},
+        {"Keyword":"review management app","Match":"broad","Suggested Bid":"$2.00","Campaign":"Features","Rationale":"Broader intent, captures merchants searching for review tools"},
+        {"Keyword":"shopify trust badges","Match":"broad","Suggested Bid":"$1.50","Campaign":"Trust","Rationale":"Trust-building intent adjacent to reviews — complements Trust campaign"},
+    ]
+    st.dataframe(pd.DataFrame(new_kws), use_container_width=True)
 
     st.markdown("---")
-    st.subheader("💰 Budget Reallocation Plan")
+    st.subheader("💰 Where to Add Budget")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Free up ~$32/day by pausing underperformers:**")
-        st.markdown("- `google reviews` + `google review` = ~$26/day\n- Broad-match junk = ~$6/day")
+        st.markdown("**Free up ~$8/day from true dead-weight keywords:**")
+        st.markdown("- `q&a` + `rich snippet` + `question` ≈ $4/day\n- `loox photo` + `rivo reviews` ≈ $2/day\n- Dead $1-bid competitor slots ≈ $2/day")
     with col2:
-        st.markdown("**Reinvest in proven performers:**")
+        st.markdown("**Add budget where volume is proven:**")
         st.markdown("""
-- BrandProtection +$130/day (14× ROAS — highest priority)
-- PLUS-ProductReview reactivate +$40/day (3× ROAS)
-- `review widget` bid increase
-- `stars` bid increase in Trust
+- BrandProtection: add $130/day (highest priority — $0.28 CPI)
+- PLUS-ProductReview: reactivate at $75/day
+- ProductReview campaign: raise daily cap to feed `review` and `review widget` keywords
 """)
-    st.success(
-        "Net effect: reallocating budget from confirmed underperformers to campaigns with "
-        "10×+ ROAS. No total budget increase needed — just better allocation."
+    st.info(
+        "The goal is more installs, not cost savings. "
+        "Free up dead-weight spend and immediately move it into campaigns/keywords with proven install volume. "
+        "BrandProtection alone at $150/day could add 350+ installs/day based on current CPI."
     )
 
     st.markdown("---")
     st.subheader("✅ Action Checklist")
     actions = [
-        ("🔴 PAUSE",          "google reviews (exact) — ProductReview",     "CPI $9.11 confirmed 2 periods"),
-        ("🔴 PAUSE",          "google review (exact) — ProductReview",      "CPI $8.61 confirmed 2 periods"),
-        ("🔴 PAUSE",          "carousel + q&a + rich snippet + question",   "Zero/near-zero installs"),
-        ("🟢 SCALE",          "BrandProtection budget $20→$150/day",        "1,436% ROAS — #1 priority"),
-        ("🟢 REACTIVATE",     "PLUS-ProductReview $10→$50/day",             "313% ROAS, targets Plus merchants"),
-        ("🟢 INCREASE BID",   "shopify product reviews $2.00→$2.50",        "+195% volume last time"),
-        ("🟢 INCREASE BID",   "review widget $4.00→$5.00",                  "111 installs/22 days"),
-        ("🟢 INCREASE BID",   "stars broad $5.00→$7.00",                    "84% install rate"),
-        ("🟡 RAISE/PAUSE",    "All $1.00-bid Competitor keywords",          "Zero impressions at $1 bid"),
-        ("🟡 AUDIT",          "Geo conversion IN/PK",                       "30% installs, low customer quality?"),
-        ("🟡 INVESTIGATE",    "Product funnel changes Nov–Dec 2025",        "ROAS decline predates ad changes"),
-        ("🟡 CONSIDER",       "Reactivate PT-Generic (Portuguese)",         "51% ROAS, paused for unknown reason"),
+        ("🔴 PAUSE", "q&a + rich snippet + question (broad)",         "Near-zero installs across all periods"),
+        ("🔴 PAUSE", "loox - photo reviews + rivo reviews (exact)",   "0 installs confirmed across 3 snapshots"),
+        ("🔴 RAISE OR PAUSE", "All $1.00-bid Competitor keywords",    "Can't win auctions at $1 — zero impressions"),
+        ("🟢 SCALE", "BrandProtection budget $20→$150/day",           "$0.28 CPI — #1 highest-priority action"),
+        ("🟢 REACTIVATE", "PLUS-ProductReview $10→$75/day",           "313% ROAS, targets Plus merchants"),
+        ("🟢 INCREASE BID", "review (exact) $2.50→$3.50",             "Top volume keyword, 1,836 installs/period"),
+        ("🟢 INCREASE BID", "shopify product reviews $3.50→$4.50",    "+195% after last raise, still scaling"),
+        ("🟢 INCREASE BID", "review widget (broad) $5.00→$6.50",      "282 installs last period"),
+        ("🟢 INCREASE BID", "stars (broad) $7.00→$9.00",              "81 installs, 84% install rate"),
+        ("🆕 ADD KEYWORD",  "shopify reviews app (exact) @ $2.50",    "High-intent, no overlap with existing"),
+        ("🆕 ADD KEYWORD",  "product review app (exact) @ $2.50",     "Broad install intent"),
+        ("🆕 ADD KEYWORD",  "stamped reviews (exact) @ $2.50",        "Competitor gap — not currently targeted"),
+        ("🆕 ADD KEYWORD",  "review request app (exact) @ $2.00",     "Judge.me core feature, high intent"),
+        ("🟡 INVESTIGATE",  "Product funnel changes Nov–Dec 2025",     "ROAS decline predates ad changes — may be a funnel issue"),
     ]
     for action, kw, note in actions:
         st.checkbox(f"**{action}** `{kw}` — {note}", key=f"chk_{kw[:40]}")
